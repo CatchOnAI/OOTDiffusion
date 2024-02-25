@@ -283,9 +283,6 @@ def main(
                 break        
     
     trainable_params = list(filter(lambda p: p.requires_grad, unet.parameters()))
-    if image_finetune:
-        trainable_params += list(filter(lambda p: p.requires_grad, poseguider.parameters())) + \
-                   list(filter(lambda p: p.requires_grad, referencenet.parameters()))
     
     # print(len(trainable_params))
     # exit(0)
