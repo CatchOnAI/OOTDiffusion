@@ -98,6 +98,8 @@ def get_parameters_without_gradients(model):
             no_grad_params.append(name)
     return no_grad_params
 
+UNET_PATH = "../checkpoints/ootd/ootd_hd/checkpoint-36000"
+MODEL_PATH = "../checkpoints/ootd"
 
 def main(
     image_finetune: bool,
@@ -210,6 +212,19 @@ def main(
         # poseguider.load_state_dict(poseguider_state_dict, strict=False)
         # referencenet.load_state_dict(referencenet_state_dict, strict=False)
 
+    unet_garm = UNetGarm2DConditionModel.from_pretrained(
+        UNET_PATH,
+        subfolder="unet_garm",
+        torch_dtype=torch.float16,
+        use_safetensors=True,
+    )
+
+    unet_vton = UNetVton2DConditionModel.from_pretrained(
+        UNET_PATH,
+        subfolder="unet_vton",
+        torch_dtype=torch.float16,
+        use_safetensors=True,
+    )
 
     unet = UNet2DConditionModel.from_pretrained(pretrained_model_path, subfolder="unet")
     
@@ -228,7 +243,27 @@ def main(
         m, u = unet.load_state_dict(state_dict, strict=False)
         zero_rank_print(f"missing keys: {len(m)}, unexpected keys: {len(u)}")
         assert len(u) == 0
-        
+    
+    if unet_garm_checkpoint_path != "":
+        zero_rank_print(f"from checkpoint: {unet_garm_checkpoint_path}")
+        unet_garm_checkpoint_path = torch.load(unet_garm_checkpoint_path, map_location="cpu")
+        if "global_step" in unet_garm_checkpoint_path: zero_rank_print(f"global_step: {unet_garm_checkpoint_path['global_step']}")
+        state_dict = unet_garm_checkpoint_path["state_dict"] if "state_dict" in unet_garm_checkpoint_path else unet_garm_checkpoint_path
+
+        m, u = unet_garm.load_state_dict(state_dict, strict=False)
+        zero_rank_print(f"missing keys: {len(m)}, unexpected keys: {len(u)}")
+        assert len(u) == 0
+
+    if unet_vton_checkpoint_path != "":
+        zero_rank_print(f"from checkpoint: {unet_vton_checkpoint_path}")
+        unet_vton_checkpoint_path = torch.load(unet_vton_checkpoint_path, map_location="cpu")
+        if "global_step" in unet_vton_checkpoint_path: zero_rank_print(f"global_step: {unet_vton_checkpoint_path['global_step']}")
+        state_dict = unet_vton_checkpoint_path["state_dict"] if "state_dict" in unet_vton_checkpoint_path else unet_vton_checkpoint_path
+
+        m, u = unet_vton.load_state_dict(state_dict, strict=False)
+        zero_rank_print(f"missing keys: {len(m)}, unexpected keys: {len(u)}")
+        assert len(u) == 0
+
     # Freeze vae and text_encoder
     vae.requires_grad_(False)
     # text_encoder.requires_grad_(False)
@@ -236,21 +271,16 @@ def main(
     
     # Set unet trainable parameters
     unet.requires_grad_(False)
+
+    unet_garm.requires_grad_(True)
+    unet_vton.requires_grad_(True)
     # unet.requires_grad_(True)
     for name, param in unet.named_parameters():
         for trainable_module_name in trainable_modules:
             if trainable_module_name in name:
                 # print(trainable_module_name)
                 param.requires_grad = True
-                break
-    # TODO: AN review this refnet 
-    # if image_finetune:
-    #     poseguider.requires_grad_(True)
-    #     referencenet.requires_grad_(True)
-    # else:
-    #     poseguider.requires_grad_(False)
-    #     referencenet.requires_grad_(False)    
-                   
+                break        
     
     trainable_params = list(filter(lambda p: p.requires_grad, unet.parameters()))
     if image_finetune:
@@ -284,13 +314,15 @@ def main(
     # Enable gradient checkpointing
     if gradient_checkpointing:
         unet.enable_gradient_checkpointing()
-        # TODO: AN review this refnet 
-        # referencenet.enable_gradient_checkpointing()
+        unet_garm.enable_gradient_checkpointing()
+        unet_vton.enable_gradient_checkpointing()
+        
 
     # Move models to GPU
     vae.to(local_rank)
     # text_encoder.to(local_rank)
     clip_image_encoder.to(local_rank)
+    unet_garm.to(local_rank)
     # TODO: AN review this refnet 
     # poseguider.to(local_rank)
     # referencenet.to(local_rank)
@@ -343,6 +375,7 @@ def main(
     )
 
     # # Validation pipeline
+    # TODO: An enable validation
     # if not image_finetune:
     #     validation_pipeline = AnimationPipeline(
     #         unet=unet, vae=vae, tokenizer=tokenizer, text_encoder=text_encoder, scheduler=noise_scheduler,
@@ -357,11 +390,11 @@ def main(
     # DDP warpper
     # To GPU
     unet.to(local_rank)
-    unet = DDP(unet, device_ids=[local_rank], output_device=local_rank)
+    unet_garm.to(local_rank)
+    unet_vton.to(local_rank)
+    unet_garm = DDP(unet_garm, device_ids=[local_rank], output_device=local_rank)
+    unet_vton = DDP(unet_vton, device_ids=[local_rank], output_device=local_rank)
     
-    if image_finetune:
-        poseguider = DDP(poseguider, device_ids=[local_rank], output_device=local_rank)
-        referencenet = DDP(referencenet, device_ids=[local_rank], output_device=local_rank)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / gradient_accumulation_steps)
@@ -391,10 +424,8 @@ def main(
 
     for epoch in range(first_epoch, num_train_epochs):
         train_dataloader.sampler.set_epoch(epoch)
-        unet.train()
-        # TODO: AN review this refnet 
-        # poseguider.train()
-        # referencenet.train()
+        unet_vton.train()
+        unet_garm.train()
         
         
         for step, batch in enumerate(train_dataloader):
@@ -544,10 +575,8 @@ def main(
                 state_dict = {
                     "epoch": epoch,
                     "global_step": global_step,
-                    "unet_state_dict": unet.module.state_dict(),
-                    "poseguider_state_dict": poseguider.module.state_dict(),
-                    "referencenet_state_dict": referencenet.module.state_dict(),
-                    
+                    "unet_garm_state_dict": unet_garm.module.state_dict(),
+                    "unet_vton_state_dict": unet_vton.module.state_dict(),                    
                 }
                 if step == len(train_dataloader) - 1:
                     torch.save(state_dict, os.path.join(save_path, f"checkpoint-epoch-{epoch+1}.ckpt"))
