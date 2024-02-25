@@ -25,7 +25,6 @@ def collate_fn(data):
     # pixel_values_ref_img = torch.cat([example["pixel_values_ref_img"] for example in data], dim=0)
     
     pixel_values = torch.stack([example["pixel_values"] for example in data])
-    pixel_values_pose = torch.stack([example["pixel_values_pose"] for example in data])
     clip_ref_image = torch.cat([example["clip_ref_image"] for example in data])
     pixel_values_ref_img = torch.stack([example["pixel_values_ref_img"] for example in data])
     drop_image_embeds = [example["drop_image_embeds"] for example in data]
@@ -33,7 +32,6 @@ def collate_fn(data):
     
     return {
         "pixel_values": pixel_values,
-        "pixel_values_pose": pixel_values_pose,
         "clip_ref_image": clip_ref_image,
         "pixel_values_ref_img": pixel_values_ref_img,
         "drop_image_embeds": drop_image_embeds,

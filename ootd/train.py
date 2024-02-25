@@ -39,13 +39,10 @@ from pipelines_ootd.unet_garm_2d_condition import UNetGarm2DConditionModel
 from pipelines_ootd.unet_vton_2d_condition import UNetVton2DConditionModel
 
 from data.dataset import CPDataset, collate_fn
-# from models.unet import UNet3DConditionModel
-# from animatediff.pipelines.pipeline_animation import AnimationPipeline
+
 from utils.util import  zero_rank_print
 from models.ReferenceEncoder import ReferenceEncoder
-# from models.PoseGuider import PoseGuider
-# from models.ReferenceNet import ReferenceNet
-# from models.ReferenceNet_attention import ReferenceNetAttention
+
 
 import pdb
 
@@ -114,8 +111,8 @@ def main(
     description: str,
     fusion_blocks: str,
     
-    poseguider_checkpoint_path: str,
-    referencenet_checkpoint_path: str,
+    unet_garm_checkpoint_path: str,
+    unet_vton_checkpoint_path: str,
     
     train_data: Dict,
     validation_data: Dict,
@@ -169,8 +166,6 @@ def main(
     seed = global_seed + global_rank
     torch.manual_seed(seed)
     
-    
-    
     # Logging folder
     folder_name = "debug" if is_debug else name + datetime.datetime.now().strftime("-%Y-%m-%dT%H-%M-%S")
     output_dir = os.path.join(output_dir, folder_name)
@@ -204,13 +199,6 @@ def main(
 
     vae          = AutoencoderKL.from_pretrained(pretrained_model_path, subfolder="vae")
     clip_image_encoder = ReferenceEncoder(model_path=clip_model_path)
-    # TODO: AN add our own parallel net here
-    # referencenet = ReferenceNet.from_pretrained(pretrained_model_path, subfolder="unet")
-    # if not image_finetune:
-        # poseguider_state_dict = torch.load(poseguider_checkpoint_path, map_location="cpu")
-        # referencenet_state_dict = torch.load(referencenet_checkpoint_path, map_location="cpu")
-        # poseguider.load_state_dict(poseguider_state_dict, strict=False)
-        # referencenet.load_state_dict(referencenet_state_dict, strict=False)
 
     unet_garm = UNetGarm2DConditionModel.from_pretrained(
         UNET_PATH,
@@ -302,10 +290,7 @@ def main(
     vae.to(local_rank)
     # text_encoder.to(local_rank)
     clip_image_encoder.to(local_rank)
-    unet_garm.to(local_rank)
-    # TODO: AN review this refnet 
-    # poseguider.to(local_rank)
-    # referencenet.to(local_rank)
+
 
     # Get the training dataset
     # train_dataset = WebVid10M(**train_data, is_image=image_finetune)
@@ -430,7 +415,6 @@ def main(
             # Convert videos to latent space            
             # TODO: AN Convert dataloader data to latent
             pixel_values = batch["pixel_values"].to(local_rank)
-            # pixel_values_pose = batch["pixel_values_pose"].to(local_rank)
             clip_ref_image = batch["clip_ref_image"].to(local_rank)
             pixel_values_ref_img = batch["pixel_values_ref_img"].to(local_rank)
             drop_image_embeds = batch["drop_image_embeds"].to(local_rank) # torch.Size([bs])
