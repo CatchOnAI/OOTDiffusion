@@ -224,25 +224,9 @@ def main(
         subfolder="unet_vton",
         torch_dtype=torch.float16,
         use_safetensors=True,
-    )
-
-    unet = UNet2DConditionModel.from_pretrained(pretrained_model_path, subfolder="unet")
-    
-    # TODO: AN to check if it's a best connection way to add two h_s
-    # reference_control_writer = ReferenceNetAttention(referencenet, do_classifier_free_guidance=False, mode='write', fusion_blocks=fusion_blocks, is_image=image_finetune)
-    # reference_control_reader = ReferenceNetAttention(unet, do_classifier_free_guidance=False, mode='read', fusion_blocks=fusion_blocks, is_image=image_finetune)
-    
+    )    
     
     # Load pretrained unet weights
-    if unet_checkpoint_path != "":
-        zero_rank_print(f"from checkpoint: {unet_checkpoint_path}")
-        unet_checkpoint_path = torch.load(unet_checkpoint_path, map_location="cpu")
-        if "global_step" in unet_checkpoint_path: zero_rank_print(f"global_step: {unet_checkpoint_path['global_step']}")
-        state_dict = unet_checkpoint_path["state_dict"] if "state_dict" in unet_checkpoint_path else unet_checkpoint_path
-
-        m, u = unet.load_state_dict(state_dict, strict=False)
-        zero_rank_print(f"missing keys: {len(m)}, unexpected keys: {len(u)}")
-        assert len(u) == 0
     
     if unet_garm_checkpoint_path != "":
         zero_rank_print(f"from checkpoint: {unet_garm_checkpoint_path}")
@@ -270,19 +254,19 @@ def main(
     clip_image_encoder.requires_grad_(False)
     
     # Set unet trainable parameters
-    unet.requires_grad_(False)
 
     unet_garm.requires_grad_(True)
     unet_vton.requires_grad_(True)
     # unet.requires_grad_(True)
-    for name, param in unet.named_parameters():
-        for trainable_module_name in trainable_modules:
-            if trainable_module_name in name:
-                # print(trainable_module_name)
-                param.requires_grad = True
-                break        
+    # TODO: An set up a detailed control on trainable modules
+    # for name, param in unet.named_parameters():
+    #     for trainable_module_name in trainable_modules:
+    #         if trainable_module_name in name:
+    #             # print(trainable_module_name)
+    #             param.requires_grad = True
+    #             break        
     
-    trainable_params = list(filter(lambda p: p.requires_grad, unet.parameters()))
+    trainable_params = list(filter(lambda p: p.requires_grad, unet_vton.parameters()))
     
     # print(len(trainable_params))
     # exit(0)
@@ -302,15 +286,14 @@ def main(
     # Enable xformers
     if enable_xformers_memory_efficient_attention:
         if is_xformers_available():
-            unet.enable_xformers_memory_efficient_attention()
-            # TODO: AN review this refnet 
-            # referencenet.enable_xformers_memory_efficient_attention()
+            unet_vton.enable_xformers_memory_efficient_attention()
+            unet_garm.enable_xformers_memory_efficient_attention()
+            
         else:
             raise ValueError("xformers is not available. Make sure it is installed correctly")
 
     # Enable gradient checkpointing
     if gradient_checkpointing:
-        unet.enable_gradient_checkpointing()
         unet_garm.enable_gradient_checkpointing()
         unet_vton.enable_gradient_checkpointing()
         
@@ -386,7 +369,6 @@ def main(
 
     # DDP warpper
     # To GPU
-    unet.to(local_rank)
     unet_garm.to(local_rank)
     unet_vton.to(local_rank)
     unet_garm = DDP(unet_garm, device_ids=[local_rank], output_device=local_rank)
@@ -517,7 +499,7 @@ def main(
                 # referencenet(latents_ref_img, ref_timesteps, encoder_hidden_states)
                 # reference_control_reader.update(reference_control_writer)
                 
-                model_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
+                model_pred = unet_vton(noisy_latents, timesteps, encoder_hidden_states).sample
                 loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
                 
                 
