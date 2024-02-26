@@ -411,8 +411,12 @@ def main(
             #             torchvision.utils.save_image(pixel_value, f"{output_dir}/sanity_check/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.png")
                     
             ### >>>> Training >>>> ###
+
+            # 1. garment latent
+            # 2. model image latent
+            # 3. mask
+            # 4. clip image
             
-            # Convert videos to latent space            
             # TODO: AN Convert dataloader data to latent
             pixel_values = batch["pixel_values"].to(local_rank)
             clip_ref_image = batch["clip_ref_image"].to(local_rank)

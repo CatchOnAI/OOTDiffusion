@@ -15,6 +15,7 @@ import torchvision.transforms as transforms
 from PIL import Image, ImageDraw
 from torch.utils.data import DataLoader
 from transformers import CLIPProcessor
+from diffusers.image_processor import PipelineImageInput, VaeImageProcessor
 
 # https://github.com/tencent-ailab/IP-Adapter/blob/main/tutorial_train.py#L341
 
@@ -83,6 +84,8 @@ class CPDataset(data.Dataset):
         self.toTensor = transforms.ToTensor()
         self.transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
         self.clip_normalize = transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
+        self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
+        self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
 
         # load data list
         im_names = []
