@@ -7,6 +7,7 @@ import inspect
 import argparse
 import datetime
 import subprocess
+import PIL.Image
 
 from pathlib import Path
 from tqdm.auto import tqdm
@@ -38,7 +39,7 @@ from pipelines_ootd.pipeline_ootd import OotdPipeline
 from pipelines_ootd.unet_garm_2d_condition import UNetGarm2DConditionModel
 from pipelines_ootd.unet_vton_2d_condition import UNetVton2DConditionModel
 
-from data.dataset import CPDataset, collate_fn
+from data.dataset import CPDataset, collate_vton_fn
 
 from utils.util import  zero_rank_print
 from models.ReferenceEncoder import ReferenceEncoder
@@ -212,7 +213,8 @@ def main(
         subfolder="unet_vton",
         torch_dtype=torch.float16,
         use_safetensors=True,
-    )    
+    )
+
     
     # Load pretrained unet weights
     
@@ -316,7 +318,7 @@ def main(
         num_workers=num_workers,
         pin_memory=True,
         drop_last=True,
-        collate_fn=collate_fn,
+        collate_fn=collate_vton_fn,
     )
 
     # Get the training iteration
@@ -418,31 +420,50 @@ def main(
             # 4. clip image
             
             # TODO: AN Convert dataloader data to latent
-            pixel_values = batch["pixel_values"].to(local_rank)
+            image_garm = batch["image_garm"].to(local_rank)
+            image_vton = batch["image_vton"].to(local_rank)
+            mask = batch["mask"].to(local_rank)
+            image_ori = batch["image_ori"].to(local_rank) # torch.Size([bs])
             clip_ref_image = batch["clip_ref_image"].to(local_rank)
-            pixel_values_ref_img = batch["pixel_values_ref_img"].to(local_rank)
-            drop_image_embeds = batch["drop_image_embeds"].to(local_rank) # torch.Size([bs])
             
             with torch.no_grad():
+
+                garm_latents = prepare_garm_latents(
+                    vae,
+                    image_garm,
+                    torch.float16,
+                    local_rank,
+                    False,
+                )
+
+                vton_latents, mask_latents, image_ori_latents = prepare_vton_latents(
+                    vae,
+                    image_vton,
+                    mask,
+                    image_ori,
+                    torch.float16,
+                    local_rank,
+                    False,
+                )
                 
-                latents = vae.encode(pixel_values).latent_dist
-                latents = latents.sample()
-                latents = latents * 0.18215
+                # latents = vae.encode(pixel_values).latent_dist
+                # latents = latents.sample()
+                # latents = latents * 0.18215
                 
-                latents_ref_img = vae.encode(pixel_values_ref_img).latent_dist
-                latents_ref_img = latents_ref_img.sample()
-                latents_ref_img = latents_ref_img * 0.18215
+                # latents_ref_img = vae.encode(pixel_values_ref_img).latent_dist
+                # latents_ref_img = latents_ref_img.sample()
+                # latents_ref_img = latents_ref_img * 0.18215
 
             # Sample noise that we'll add to the latents
-            noise = torch.randn_like(latents)
-            bsz = latents.shape[0]
+            noise = torch.randn_like(vton_latents)
+            bsz = vton_latents.shape[0]
             
             # Sample a random timestep for each video
-            timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
+            timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=vton_latents.device)
             timesteps = timesteps.long()
             
             # Add noise to the latents according to the noise magnitude at each timestep
-            noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
+            noisy_latents = noise_scheduler.add_noise(vton_latents, noise, timesteps)
             
             
             # if not image_finetune:
@@ -463,7 +484,7 @@ def main(
                 encoder_hidden_states = clip_image_encoder(clip_ref_image).unsqueeze(1) # [bs,1,768]
             
             # support cfg train
-            mask = drop_image_embeds > 0
+            mask = mask > 0
             mask = mask.unsqueeze(1).unsqueeze(2).expand_as(encoder_hidden_states)
             encoder_hidden_states[mask] = 0
 
@@ -486,6 +507,7 @@ def main(
                 # TODO: AN review this refnet 
                 # referencenet(latents_ref_img, ref_timesteps, encoder_hidden_states)
                 # reference_control_reader.update(reference_control_writer)
+                unet_garm(noisy_latents, timesteps, encoder_hidden_states)
                 
                 model_pred = unet_vton(noisy_latents, timesteps, encoder_hidden_states).sample
                 loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
@@ -607,6 +629,67 @@ def main(
                 break
             
     dist.destroy_process_group()
+
+
+def prepare_garm_latents(
+    vae, image, dtype, device, do_classifier_free_guidance, generator=None
+):
+    if not isinstance(image, (torch.Tensor, PIL.Image.Image, list)):
+        raise ValueError(
+            f"`image` has to be of type `torch.Tensor`, `PIL.Image.Image` or list but is {type(image)}"
+        )
+
+    image = image.to(device=device, dtype=dtype)
+
+
+    if image.shape[1] == 4:
+        image_latents = image
+    else:
+        image_latents = vae.encode(image).latent_dist.mode()
+
+    image_latents = torch.cat([image_latents], dim=0)
+
+    if do_classifier_free_guidance:
+        uncond_image_latents = torch.zeros_like(image_latents)
+        image_latents = torch.cat([image_latents, uncond_image_latents], dim=0)
+
+    return image_latents
+
+
+def prepare_vton_latents(
+    vae, image, mask, image_ori, dtype, device, do_classifier_free_guidance, generator=None
+):
+    if not isinstance(image, (torch.Tensor, PIL.Image.Image, list)):
+        raise ValueError(
+            f"`image` has to be of type `torch.Tensor`, `PIL.Image.Image` or list but is {type(image)}"
+        )
+
+    image = image.to(device=device, dtype=dtype)
+    image_ori = image_ori.to(device=device, dtype=dtype)
+
+    if image.shape[1] == 4:
+        image_latents = image
+        image_ori_latents = image_ori
+    else:
+
+        image_latents = vae.encode(image).latent_dist.mode()
+        image_ori_latents = vae.encode(image_ori).latent_dist.mode()
+
+    mask = torch.nn.functional.interpolate(
+        mask, size=(image_latents.size(-2), image_latents.size(-1))
+    )
+    mask = mask.to(device=device, dtype=dtype)
+
+    
+    image_latents = torch.cat([image_latents], dim=0)
+    mask = torch.cat([mask], dim=0)
+    image_ori_latents = torch.cat([image_ori_latents], dim=0)
+
+    if do_classifier_free_guidance:
+        # uncond_image_latents = torch.zeros_like(image_latents)
+        image_latents = torch.cat([image_latents] * 2, dim=0)
+
+    return image_latents, mask, image_ori_latents
 
 
 
