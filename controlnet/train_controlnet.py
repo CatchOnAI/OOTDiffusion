@@ -52,7 +52,7 @@ from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.hub_utils import load_or_create_model_card, populate_model_card
 from diffusers.utils.import_utils import is_xformers_available
 from diffusers.utils.torch_utils import is_compiled_module
-
+from cp_dataset import CPDataset
 
 if is_wandb_available():
     import wandb
@@ -579,6 +579,11 @@ def parse_args(input_args=None):
         type=str,
         default=None,
     )
+    parser.add_argument(
+        "--dataroot",
+        type=str,
+        default=None,
+    )
     
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -775,7 +780,6 @@ def make_train_dataset(args, tokenizer, accelerator):
 
     return train_dataset
 
-
 def collate_fn(examples):
     pixel_values = torch.stack([example["pixel_values"] for example in examples])
     pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
@@ -790,7 +794,6 @@ def collate_fn(examples):
         "conditioning_pixel_values": conditioning_pixel_values,
         "input_ids": input_ids,
     }
-
 
 def main(args):
     if args.report_to == "wandb" and args.hub_token is not None:
@@ -974,12 +977,56 @@ def main(args):
         eps=args.adam_epsilon,
     )
 
-    train_dataset = make_train_dataset(args, tokenizer, accelerator)
+    if args.dataroot is None:
+        assert "Please provide correct data root"
+    # train_dataset = make_train_dataset(args, tokenizer, accelerator)
+    train_dataset = CPDataset(args.dataroot, args.resolution, mode="train")
+
+    def collate_fn_cp(examples):
+        pixel_values = torch.stack([example["inpaint_image"] for example in examples])
+        pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
+
+        conditioning_pixel_values = torch.stack([example["inpaint_pa"] for example in examples])
+        conditioning_pixel_values = conditioning_pixel_values.to(memory_format=torch.contiguous_format).float()
+
+        pixel_values_garm = torch.stack([example["inpaint_pa"] for example in examples])
+        pixel_values_garm = conditioning_pixel_values.to(memory_format=torch.contiguous_format).float()
+
+        def tokenize_captions_internal(is_train=True):
+            captions = []
+            for caption in examples:
+                # if random.random() < args.proportion_empty_prompts:
+                #     captions.append("")
+                # elif isinstance(caption, str):
+                #     captions.append(caption)
+                # elif isinstance(caption, (list, np.ndarray)):
+                #     # take a random caption if there are multiple
+                #     captions.append(random.choice(caption) if is_train else caption[0])
+                # else:
+                #     raise ValueError(
+                #         f"Caption column `{caption_column}` should contain either strings or lists of strings."
+                #     )
+                captions.append("")
+            inputs = tokenizer(
+                captions, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
+            )
+            return inputs.input_ids
+
+        input_ids = tokenize_captions_internal(examples)
+        # TODO: AN revise this part to integrate tokenize in dataset instead of this hacky way
+        input_ids = torch.stack([example for example in input_ids])
+
+        return {
+            "pixel_values": pixel_values,
+            "conditioning_pixel_values": conditioning_pixel_values,
+            "input_ids": input_ids,
+            "pixel_values_garm": pixel_values_garm,
+        }
 
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         shuffle=True,
-        collate_fn=collate_fn,
+        collate_fn=collate_fn_cp,
         batch_size=args.train_batch_size,
         num_workers=args.dataloader_num_workers,
     )
@@ -1091,6 +1138,7 @@ def main(args):
             with accelerator.accumulate(controlnet):
                 # Convert images to latent space
                 latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
+                latents_garm = vae.encode(batch["pixel_values_garm"].to(dtype=weight_dtype)).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
 
                 # Sample noise that we'll add to the latents
@@ -1103,14 +1151,14 @@ def main(args):
                 # Add noise to the latents according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
-
+                noisy_latents_garm = noise_scheduler.add_noise(latents_garm, noise, timesteps)
                 # Get the text embedding for conditioning
                 encoder_hidden_states = text_encoder(batch["input_ids"], return_dict=False)[0]
 
                 controlnet_image = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
 
                 down_block_res_samples, mid_block_res_sample = controlnet(
-                    noisy_latents,
+                    noisy_latents_garm,
                     timesteps,
                     encoder_hidden_states=encoder_hidden_states,
                     controlnet_cond=controlnet_image,
