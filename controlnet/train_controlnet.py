@@ -43,7 +43,6 @@ from diffusers import (
     AutoencoderKL,
     ControlNetModel,
     DDPMScheduler,
-    StableDiffusionControlNetPipeline,
     UNet2DConditionModel,
     UniPCMultistepScheduler,
 )
@@ -53,6 +52,7 @@ from diffusers.utils.hub_utils import load_or_create_model_card, populate_model_
 from diffusers.utils.import_utils import is_xformers_available
 from diffusers.utils.torch_utils import is_compiled_module
 from cp_dataset import CPDataset
+from pipeline.pipeline_controlnet import (StableDiffusionControlNetPipeline)
 
 if is_wandb_available():
     import wandb
@@ -106,12 +106,18 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
     if len(args.validation_image) == len(args.validation_prompt):
         validation_images = args.validation_image
         validation_prompts = args.validation_prompt
+        validation_images_garm = args.validation_image_garm
+        validation_original_images = args.validation_original_image
     elif len(args.validation_image) == 1:
         validation_images = args.validation_image * len(args.validation_prompt)
         validation_prompts = args.validation_prompt
+        validation_images_garm = args.validation_image_garm
+        validation_original_images = args.validation_original_image
     elif len(args.validation_prompt) == 1:
         validation_images = args.validation_image
         validation_prompts = args.validation_prompt * len(args.validation_image)
+        validation_images_garm = args.validation_image_garm
+        validation_original_images = args.validation_original_image
     else:
         raise ValueError(
             "number of `args.validation_image` and `args.validation_prompt` should be checked in `parse_args`"
@@ -119,7 +125,7 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
 
     image_logs = []
 
-    for validation_prompt, validation_image in zip(validation_prompts, validation_images):
+    for validation_prompt, validation_image, validation_image_garm, validation_original_image in zip(validation_prompts, validation_images, validation_images_garm, validation_original_images):
         validation_image = Image.open(validation_image).convert("RGB")
 
         images = []
@@ -127,7 +133,7 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
         for _ in range(args.num_validation_images):
             with torch.autocast("cuda"):
                 image = pipeline(
-                    validation_prompt, validation_image, num_inference_steps=20, generator=generator
+                    validation_prompt, validation_image, validation_image_garm, validation_original_image, num_inference_steps=20, generator=generator
                 ).images[0]
 
             images.append(image)
@@ -519,6 +525,30 @@ def parse_args(input_args=None):
         ),
     )
     parser.add_argument(
+        "--validation_image_gram",
+        type=str,
+        default=None,
+        nargs="+",
+        help=(
+            "A set of paths to the controlnet conditioning image be evaluated every `--validation_steps`"
+            " and logged to `--report_to`. Provide either a matching number of `--validation_image_gram`s, a"
+            " a single `--validation_image_gram` to be used with all `--validation_image_gram`s, or a single"
+            " `--validation_image_gram` that will be used with all `--validation_image_gram`s."
+        ),
+    )
+    parser.add_argument(
+        "--validation_original_image",
+        type=str,
+        default=None,
+        nargs="+",
+        help=(
+            "A set of paths to the controlnet conditioning image be evaluated every `--validation_steps`"
+            " and logged to `--report_to`. Provide either a matching number of `--validation_original_image`s, a"
+            " a single `--validation_original_image` to be used with all `--validation_original_image`s, or a single"
+            " `--validation_original_image` that will be used with all `--validation_original_image`s."
+        ),
+    )
+    parser.add_argument(
         "--num_validation_images",
         type=int,
         default=4,
@@ -795,6 +825,50 @@ def collate_fn(examples):
         "input_ids": input_ids,
     }
 
+def prepare_garm_latents(
+    self, image, batch_size, num_images_per_prompt, dtype, device, do_classifier_free_guidance, generator=None
+):
+    if not isinstance(image, (torch.Tensor, PIL.Image.Image, list)):
+        raise ValueError(
+            f"`image` has to be of type `torch.Tensor`, `PIL.Image.Image` or list but is {type(image)}"
+        )
+
+    image = image.to(device=device, dtype=dtype)
+
+    batch_size = batch_size * num_images_per_prompt
+
+    if image.shape[1] == 4:
+        image_latents = image
+    else:
+        if isinstance(generator, list) and len(generator) != batch_size:
+            raise ValueError(
+                f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
+                f" size of {batch_size}. Make sure the batch size matches the length of the generators."
+            )
+
+        if isinstance(generator, list):
+            image_latents = [self.vae.encode(image[i : i + 1]).latent_dist.mode() for i in range(batch_size)]
+            image_latents = torch.cat(image_latents, dim=0)
+        else:
+            image_latents = self.vae.encode(image).latent_dist.mode()
+
+    if batch_size > image_latents.shape[0] and batch_size % image_latents.shape[0] == 0:
+        additional_image_per_prompt = batch_size // image_latents.shape[0]
+        image_latents = torch.cat([image_latents] * additional_image_per_prompt, dim=0)
+    elif batch_size > image_latents.shape[0] and batch_size % image_latents.shape[0] != 0:
+        raise ValueError(
+            f"Cannot duplicate `image` of batch size {image_latents.shape[0]} to {batch_size} text prompts."
+        )
+    else:
+        image_latents = torch.cat([image_latents], dim=0)
+
+    if do_classifier_free_guidance:
+        uncond_image_latents = torch.zeros_like(image_latents)
+        image_latents = torch.cat([image_latents, uncond_image_latents], dim=0)
+
+    return image_latents
+
+
 def main(args):
     if args.report_to == "wandb" and args.hub_token is not None:
         raise ValueError(
@@ -991,6 +1065,9 @@ def main(args):
 
         pixel_values_garm = torch.stack([example["inpaint_pa"] for example in examples])
         pixel_values_garm = conditioning_pixel_values.to(memory_format=torch.contiguous_format).float()
+
+        inpaint_mask = torch.stack([example["inpaint_mask"] for example in examples])
+        inpaint_mask = inpaint_mask.to(memory_format=torch.contiguous_format).float()
 
         def tokenize_captions_internal(is_train=True):
             captions = []
