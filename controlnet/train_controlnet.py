@@ -208,12 +208,8 @@ def save_model_card(repo_id: str, image_logs=None, base_model=str, repo_folder=N
             image_grid(images, 1, len(images)).save(os.path.join(repo_folder, f"images_{i}.png"))
             img_str += f"![images_{i})](./images_{i}.png)\n"
 
-    model_description = f"""
-# controlnet-{repo_id}
-
-These are controlnet weights trained on {base_model} with new type of conditioning.
-{img_str}
-"""
+    model_description = f"""controlnet-{repo_id} 
+    These are controlnet weights trained on {base_model} with new type of conditioning.{img_str}"""
     model_card = load_or_create_model_card(
         repo_id_or_path=repo_id,
         from_training=True,
@@ -581,6 +577,12 @@ def parse_args(input_args=None):
     )
     parser.add_argument(
         "--dataroot",
+        type=str,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--data_list",
         type=str,
         default=None,
     )
@@ -980,7 +982,7 @@ def main(args):
     if args.dataroot is None:
         assert "Please provide correct data root"
     # train_dataset = make_train_dataset(args, tokenizer, accelerator)
-    train_dataset = CPDataset(args.dataroot, args.resolution, mode="train")
+    train_dataset = CPDataset(args.dataroot, args.resolution, mode="train", data_list=args.data_list)
 
     def collate_fn_cp(examples):
         pixel_values = torch.stack([example["inpaint_image"] for example in examples])
@@ -1245,7 +1247,7 @@ def main(args):
             if global_step >= args.max_train_steps:
                 break
 
-    # Create the pipeline using using the trained modules and save it.
+    # Create the pipeline using the trained modules and save it.
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
         controlnet = unwrap_model(controlnet)
