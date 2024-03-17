@@ -30,7 +30,6 @@ import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
-from datasets import load_dataset
 from huggingface_hub import create_repo, upload_folder
 from packaging import version
 from PIL import Image
@@ -1070,7 +1069,8 @@ def main(args):
 
         def tokenize_captions_internal(is_train=True):
             captions = []
-            for caption in examples["input_ids"]:
+            for example in examples:
+                caption = example["input_id"]
                 if random.random() < args.proportion_empty_prompts:
                     captions.append("")
                 elif isinstance(caption, str):
