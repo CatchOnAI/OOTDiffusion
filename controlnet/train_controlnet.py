@@ -754,19 +754,18 @@ def make_train_dataset(args, tokenizer, accelerator):
 
     def tokenize_captions(examples, is_train=True):
         captions = []
-        for caption in examples[image]:
-            # if random.random() < args.proportion_empty_prompts:
-            #     captions.append("")
-            # elif isinstance(caption, str):
-            #     captions.append(caption)
-            # elif isinstance(caption, (list, np.ndarray)):
-            #     # take a random caption if there are multiple
-            #     captions.append(random.choice(caption) if is_train else caption[0])
-            # else:
-            #     raise ValueError(
-            #         f"Caption column `{caption_column}` should contain either strings or lists of strings."
-            #     )
-            captions.append("")
+        for caption in examples["input_ids"]:
+            if random.random() < args.proportion_empty_prompts:
+                captions.append("")
+            elif isinstance(caption, str):
+                captions.append(caption)
+            elif isinstance(caption, (list, np.ndarray)):
+                # take a random caption if there are multiple
+                captions.append(random.choice(caption) if is_train else caption[0])
+            else:
+                raise ValueError(
+                    f"Caption column input_ids should contain either strings or lists of strings."
+                )
         inputs = tokenizer(
             captions, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
         )
@@ -1071,26 +1070,24 @@ def main(args):
 
         def tokenize_captions_internal(is_train=True):
             captions = []
-            for caption in examples:
-                # if random.random() < args.proportion_empty_prompts:
-                #     captions.append("")
-                # elif isinstance(caption, str):
-                #     captions.append(caption)
-                # elif isinstance(caption, (list, np.ndarray)):
-                #     # take a random caption if there are multiple
-                #     captions.append(random.choice(caption) if is_train else caption[0])
-                # else:
-                #     raise ValueError(
-                #         f"Caption column `{caption_column}` should contain either strings or lists of strings."
-                #     )
-                captions.append("")
+            for caption in examples["input_ids"]:
+                if random.random() < args.proportion_empty_prompts:
+                    captions.append("")
+                elif isinstance(caption, str):
+                    captions.append(caption)
+                elif isinstance(caption, (list, np.ndarray)):
+                    # take a random caption if there are multiple
+                    captions.append(random.choice(caption) if is_train else caption[0])
+                else:
+                    raise ValueError(
+                        f"Caption column input_ids should contain either strings or lists of strings."
+                    )
             inputs = tokenizer(
                 captions, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
             )
             return inputs.input_ids
 
-        input_ids = tokenize_captions_internal(examples)
-        # TODO: AN revise this part to integrate tokenize in dataset instead of this hacky way
+        input_ids = tokenize_captions_internal()
         input_ids = torch.stack([example for example in input_ids])
 
         return {

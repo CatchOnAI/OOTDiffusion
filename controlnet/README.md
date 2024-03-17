@@ -60,7 +60,7 @@ wget https://huggingface.co/datasets/huggingface/documentation-images/resolve/ma
 
 ```bash
 export MODEL_DIR="runwayml/stable-diffusion-v1-5"
-export OUTPUT_DIR="path to save model"
+export OUTPUT_DIR="output"
 
 accelerate launch train_controlnet.py \
  --pretrained_model_name_or_path=$MODEL_DIR \

@@ -1,47 +1,44 @@
 from PIL import Image
-import json  
-import os 
-import random 
+import json
+import os
+import random
 import shutil
 from clip_interrogator import Config, Interrogator
+import torch
 
+# Set the device to GPU
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-vtol_folder_path = "controlnet/data/VITON-HD/"
+# Allocate the maximum available GPU memory
+torch.cuda.set_per_process_memory_fraction(1.0, device=device)
+
+vtol_folder_path = "/workspace/OOTDiffusion/controlnet/data/VITON-HD"
 test_folder_path = f"{vtol_folder_path}/test"
 train_folder_path = f"{vtol_folder_path}/train"
 
+is_train = True
 
-all_cloth_names = [img_name for img_name in os.listdir(f"{vtol_folder_path}/test/cloth")]
-sub_cloth_names = set(random.choices(all_cloth_names, k=128))
+if not is_train:
+    all_cloth_names = [img_name for img_name in os.listdir(f"{vtol_folder_path}/test/cloth")]
+else:
+    all_cloth_names = [img_name for img_name in os.listdir(f"{vtol_folder_path}/train/cloth")]
 
-percent = 20 
+print(all_cloth_names)
 
-def keep_certain_rows(file_path, condition, newfile_path):
-    with open(file_path, 'r') as file:
-        lines = file.readlines()
+images_path = f"{test_folder_path}/cloth" if not is_train else f"{train_folder_path}/cloth"
 
-    # Keep only lines that meet the condition
-    # kept_lines = [' '.join([line.split(' ')[1][:-1], line.split(' ')[1][:-1]+'\n']) for line in lines if condition(line)]
-    kept_lines = [line for line in lines if condition(line)]
-
-    # Write the kept lines to a new file
-    with open(newfile_path, 'w') as file:
-        file.writelines(kept_lines)
-
-# Define your condition here
-def condition(line):
-    # return line.split(' ')[1][:-1] in sub_cloth_names
-    return random.random() < percent/100
-
-# Call the function
-keep_certain_rows(f'{vtol_folder_path}/train_pairs.txt', condition, f'{vtol_folder_path}/subtrain_{percent}.txt')
-
-
-images_path = f"{test_folder_path}/cloth"
 ci = Interrogator(Config(clip_model_name="ViT-L-14/openai"))
 
 result = {}
-for cloth_name in sub_cloth_names:
+
+for cloth_name in all_cloth_names:
     image = Image.open(f"{images_path}/{cloth_name}").convert('RGB')
     caption = ci.interrogate(image)
     result[cloth_name] = caption
+
+    if not is_train:
+        with open(f"{test_folder_path}/cloth_caption/{os.path.splitext(cloth_name)[0]}.txt", 'w') as f:
+            f.write(caption)
+    else:
+        with open(f"{train_folder_path}/cloth_caption/{os.path.splitext(cloth_name)[0]}.txt", 'w') as f:
+            f.write(caption)

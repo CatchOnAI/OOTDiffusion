@@ -330,6 +330,14 @@ class CPDataset(data.Dataset):
         inpaint_warp_cloth = feat * (1 - hands_mask) + agnostic * hands_mask
         tensor_to_image(inpaint_with_pose, "./internal/inpaint_with_pose.jpg")
         tensor_to_image(inpaint_warp_cloth, "./internal/inpaint_warp_cloth.jpg")
+        
+        # load captions
+        caption_name = c_name[key].replace("cloth", "cloth_caption").replace(".jpg", ".txt")
+        caption_string = "A cloth"
+        with open(caption_name, 'r') as file:
+            caption_string = file.read()
+        
+        print(caption_string)
 
         c_img = np.array(c_img).astype(np.uint8)
         result = {
@@ -341,7 +349,7 @@ class CPDataset(data.Dataset):
             "warp_feat": feat,
             "file_name": self.im_names[index],
             "cloth_array": np.array(c_img).astype(np.uint8),
-            "input_ids": ""
+            "input_ids": caption_string
         }
         return result
 
