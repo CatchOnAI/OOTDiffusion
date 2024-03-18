@@ -19,6 +19,7 @@ import math
 import os
 import random
 import shutil
+import json
 from pathlib import Path
 
 import accelerate
@@ -36,6 +37,7 @@ from PIL import Image
 from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, PretrainedConfig
+from utils_ootd import get_mask_location
 
 import diffusers
 from diffusers import (
@@ -60,6 +62,9 @@ if is_wandb_available():
 # check_min_version("0.27.0.dev0")
 
 logger = get_logger(__name__)
+
+category_dict = ['upperbody', 'lowerbody', 'dress']
+category_dict_utils = ['upper_body', 'lower_body', 'dresses']
 
 
 def image_grid(imgs, rows, cols):
@@ -124,15 +129,27 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
 
     image_logs = []
 
-    for validation_prompt, validation_image, validation_image_garm, validation_original_image in zip(validation_prompts, validation_images, validation_images_garm, validation_original_images):
+    for validation_prompt, validation_image, validation_image_garm in zip(validation_prompts, validation_images, validation_images_garm):
+        with open(validation_image.replace(".jpg", "_keypoints.json")) as f:
+            keypoints = json.load(f)["people"][0]
+        model_parse = Image.open(validation_image.replace(".jpg", ".png"))
         validation_image = Image.open(validation_image).convert("RGB")
+        validation_image_garm = Image.open(validation_image_garm).convert("RGB")
+        # validation_original_image = Image.open(validation_original_image).convert("RGB")
+        
+        mask, mask_gray = get_mask_location("hd", category_dict_utils[0], model_parse, keypoints)
+        mask = mask.resize((768, 1024), Image.NEAREST)
+        mask_gray = mask_gray.resize((768, 1024), Image.NEAREST)
+        
+        masked_vton_img = Image.composite(mask_gray, validation_image, mask)
+        masked_vton_img.save('./internal/sample_mask.jpg')
 
         images = []
 
         for _ in range(args.num_validation_images):
             with torch.autocast("cuda"):
                 image = pipeline(
-                    validation_prompt, validation_image, validation_image_garm, validation_original_image, num_inference_steps=20, generator=generator
+                    validation_prompt, masked_vton_img, validation_image_garm, mask, validation_image, num_inference_steps=20, generator=generator
                 ).images[0]
 
             images.append(image)
@@ -524,15 +541,15 @@ def parse_args(input_args=None):
         ),
     )
     parser.add_argument(
-        "--validation_image_gram",
+        "--validation_image_garm",
         type=str,
         default=None,
         nargs="+",
         help=(
             "A set of paths to the controlnet conditioning image be evaluated every `--validation_steps`"
-            " and logged to `--report_to`. Provide either a matching number of `--validation_image_gram`s, a"
-            " a single `--validation_image_gram` to be used with all `--validation_image_gram`s, or a single"
-            " `--validation_image_gram` that will be used with all `--validation_image_gram`s."
+            " and logged to `--report_to`. Provide either a matching number of `--validation_image_garm`s, a"
+            " a single `--validation_image_garm` to be used with all `--validation_image_garm`s, or a single"
+            " `--validation_image_garm` that will be used with all `--validation_image_garm`s."
         ),
     )
     parser.add_argument(
