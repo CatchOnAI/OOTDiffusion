@@ -26,7 +26,7 @@ from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.embeddings import ImagePositionalEmbeddings
 from diffusers.utils import USE_PEFT_BACKEND, BaseOutput, deprecate
 # from diffusers.models.attention import BasicTransformerBlock
-from diffusers.models.embeddings import CaptionProjection, PatchEmbed
+from diffusers.models.embeddings import PixArtAlphaTextProjection, PatchEmbed
 from diffusers.models.lora import LoRACompatibleConv, LoRACompatibleLinear
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.normalization import AdaLayerNormSingle
@@ -237,7 +237,7 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
 
         self.caption_projection = None
         if caption_channels is not None:
-            self.caption_projection = CaptionProjection(in_features=caption_channels, hidden_size=inner_dim)
+            self.caption_projection = PixArtAlphaTextProjection(in_features=caption_channels, hidden_size=inner_dim)
 
         self.gradient_checkpointing = False
 
@@ -395,6 +395,7 @@ class Transformer2DModel(ModelMixin, ConfigMixin):
         # 3. Output
         if self.is_input_continuous:
             if not self.use_linear_projection:
+                # FIXME: something wrong in preprocessing data
                 hidden_states = hidden_states.reshape(batch, height, width, inner_dim).permute(0, 3, 1, 2).contiguous()
                 hidden_states = (
                     self.proj_out(hidden_states, scale=lora_scale)

@@ -52,10 +52,18 @@ from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.hub_utils import load_or_create_model_card, populate_model_card
 from diffusers.utils.import_utils import is_xformers_available
 from diffusers.utils.torch_utils import is_compiled_module
-from cp_dataset import CPDataset
+from diffusers.utils import (
+    PIL_INTERPOLATION,
+    USE_PEFT_BACKEND,
+    deprecate,
+    replace_example_docstring,
+    scale_lora_layers,
+    unscale_lora_layers,
+)
+from data_scripts.cp_dataset import CPDataset
+import wandb
 
-if is_wandb_available():
-    import wandb
+from ootd.train_ootd_hd import OOTDiffusionHD
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 # check_min_version("0.27.0.dev0")
@@ -137,23 +145,7 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
         )
 
     for tracker in accelerator.trackers:
-        if tracker.name == "tensorboard":
-            for log in image_logs:
-                images = log["images"]
-                validation_prompt = log["validation_prompt"]
-                validation_image = log["validation_image"]
-
-                formatted_images = []
-
-                formatted_images.append(np.asarray(validation_image))
-
-                for image in images:
-                    formatted_images.append(np.asarray(image))
-
-                formatted_images = np.stack(formatted_images)
-
-                tracker.writer.add_images(validation_prompt, formatted_images, step, dataformats="NHWC")
-        elif tracker.name == "wandb":
+        if tracker.name == "wandb":
             formatted_images = []
 
             for log in image_logs:
@@ -186,6 +178,7 @@ def import_model_class_from_model_name_or_path(pretrained_model_name_or_path: st
         from transformers import CLIPTextModel
 
         return CLIPTextModel
+    # TODO: what hell is this?
     elif model_class == "RobertaSeriesModelWithTransformation":
         from diffusers.pipelines.alt_diffusion.modeling_roberta_series import RobertaSeriesModelWithTransformation
 
@@ -195,6 +188,7 @@ def import_model_class_from_model_name_or_path(pretrained_model_name_or_path: st
 
 
 def save_model_card(repo_id: str, image_logs=None, base_model=str, repo_folder=None):
+    """Only used for pushing the model HF hub."""
     img_str = ""
     if image_logs is not None:
         img_str = "You can find some example images below.\n"
@@ -233,6 +227,14 @@ def save_model_card(repo_id: str, image_logs=None, base_model=str, repo_folder=N
 
 def parse_args(input_args=None):
     parser = argparse.ArgumentParser(description="Simple example of a ControlNet training script.")
+    
+    parser.add_argument(
+        "--model_type",
+        type=str,
+        default="hd",
+        help="We will have two types of models, half body and full body.",
+    )
+    
     parser.add_argument(
         "--pretrained_model_name_or_path",
         type=str,
@@ -471,12 +473,6 @@ def parse_args(input_args=None):
     )
 
     parser.add_argument(
-        "--caption_column",
-        type=str,
-        default="text",
-        help="The column of the dataset containing a caption or a list of captions.",
-    )
-    parser.add_argument(
         "--max_train_samples",
         type=int,
         default=None,
@@ -491,29 +487,7 @@ def parse_args(input_args=None):
         default=0,
         help="Proportion of image prompts to be replaced with empty strings. Defaults to 0 (no prompt replacement).",
     )
-    parser.add_argument(
-        "--validation_prompt",
-        type=str,
-        default=None,
-        nargs="+",
-        help=(
-            "A set of prompts evaluated every `--validation_steps` and logged to `--report_to`."
-            " Provide either a matching number of `--validation_image`s, a single `--validation_image`"
-            " to be used with all prompts, or a single prompt that will be used with all `--validation_image`s."
-        ),
-    )
-    parser.add_argument(
-        "--validation_image",
-        type=str,
-        default=None,
-        nargs="+",
-        help=(
-            "A set of paths to the controlnet conditioning image be evaluated every `--validation_steps`"
-            " and logged to `--report_to`. Provide either a matching number of `--validation_prompt`s, a"
-            " a single `--validation_prompt` to be used with all `--validation_image`s, or a single"
-            " `--validation_image` that will be used with all `--validation_prompt`s."
-        ),
-    )
+    
     parser.add_argument(
         "--num_validation_images",
         type=int,
@@ -539,42 +513,7 @@ def parse_args(input_args=None):
             " more information see https://huggingface.co/docs/accelerate/v0.17.0/en/package_reference/accelerator#accelerate.Accelerator"
         ),
     )
-    parser.add_argument(
-        "--cloth",
-        type=str,
-        default=None,
-    )
-    parser.add_argument(
-        "--cloth_mask",
-        type=str,
-        default=None,
-    )
-    parser.add_argument(
-        "--cloth_parse",
-        type=str,
-        default=None,
-    )
-    parser.add_argument(
-        "--dense",
-        type=str,
-        default=None,
-    )
-    parser.add_argument(
-        "--image",
-        type=str,
-        default=None,
-    )
     
-    parser.add_argument(
-        "--openpose_json",
-        type=str,
-        default=None,
-    )
-    parser.add_argument(
-        "--parse",
-        type=str,
-        default=None,
-    )
     parser.add_argument(
         "--dataroot",
         type=str,
@@ -586,7 +525,14 @@ def parse_args(input_args=None):
         type=str,
         default=None,
     )
-    
+
+    # How to set up for multiple GPUs?
+    parser.add_argument(
+        "--gpu_id",
+        type=int,
+        default=0,
+    )
+
     if input_args is not None:
         args = parser.parse_args(input_args)
     else:
@@ -600,24 +546,6 @@ def parse_args(input_args=None):
 
     if args.proportion_empty_prompts < 0 or args.proportion_empty_prompts > 1:
         raise ValueError("`--proportion_empty_prompts` must be in the range [0, 1].")
-
-    if args.validation_prompt is not None and args.validation_image is None:
-        raise ValueError("`--validation_image` must be set if `--validation_prompt` is set")
-
-    if args.validation_prompt is None and args.validation_image is not None:
-        raise ValueError("`--validation_prompt` must be set if `--validation_image` is set")
-
-    if (
-        args.validation_image is not None
-        and args.validation_prompt is not None
-        and len(args.validation_image) != 1
-        and len(args.validation_prompt) != 1
-        and len(args.validation_image) != len(args.validation_prompt)
-    ):
-        raise ValueError(
-            "Must provide either 1 `--validation_image`, 1 `--validation_prompt`,"
-            " or the same number of `--validation_prompt`s and `--validation_image`s"
-        )
 
     if args.resolution % 8 != 0:
         raise ValueError(
@@ -854,33 +782,17 @@ def main(args):
             use_fast=False,
         )
 
-    # import correct text encoder class
-    text_encoder_cls = import_model_class_from_model_name_or_path(args.pretrained_model_name_or_path, args.revision)
-
     # Load scheduler and models
-    noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
-    text_encoder = text_encoder_cls.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, variant=args.variant
-    )
-    vae = AutoencoderKL.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, variant=args.variant
-    )
-    unet = UNet2DConditionModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision, variant=args.variant
-    )
-
-    if args.controlnet_model_name_or_path:
-        logger.info("Loading existing controlnet weights")
-        controlnet = ControlNetModel.from_pretrained(args.controlnet_model_name_or_path)
+    if args.model_type == "hd":
+        # TODO: it is better to move all these paths to args or a config file.
+        model = OOTDiffusionHD(
+            args.gpu_id, 
+            vit_path="openai/clip-vit-large-patch14",
+            vae_path="/home/stevexu/VSprojects/OOTDiffusion/checkpoints/ootd", 
+            model_path="/home/stevexu/VSprojects/OOTDiffusion/checkpoints/train_ootd",
+            )
     else:
-        logger.info("Initializing controlnet weights from unet")
-        controlnet = ControlNetModel.from_unet(unet)
-
-    # Taken from [Sayak Paul's Diffusers PR #6511](https://github.com/huggingface/diffusers/pull/6511/files)
-    def unwrap_model(model):
-        model = accelerator.unwrap_model(model)
-        model = model._orig_mod if is_compiled_module(model) else model
-        return model
+        raise NotImplementedError(f"Model type {args.model_type} not implemented")
 
     # `accelerate` 0.16.0 will have better support for customized saving
     if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
@@ -913,15 +825,6 @@ def main(args):
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
 
-    vae.requires_grad_(False)
-    unet.requires_grad_(False)
-    text_encoder.requires_grad_(False)
-    controlnet.train()
-    if any([not p.is_leaf for p in controlnet.parameters()]):
-        print("Controlnet have trainable parameters")
-    elif all([p.is_leaf for p in controlnet.parameters()]):
-        print("Controlnet have no trainable parameters")
-
     if args.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
             import xformers
@@ -931,13 +834,14 @@ def main(args):
                 logger.warn(
                     "xFormers 0.0.16 cannot be used for training in some GPUs. If you observe problems during training, please update xFormers to at least 0.0.17. See https://huggingface.co/docs/diffusers/main/en/optimization/xformers for more details."
                 )
-            unet.enable_xformers_memory_efficient_attention()
-            controlnet.enable_xformers_memory_efficient_attention()
+            model.unet_garm.enable_xformers_memory_efficient_attention()
+            model.unet_vton.enable_xformers_memory_efficient_attention()
         else:
             raise ValueError("xformers is not available. Make sure it is installed correctly")
 
     if args.gradient_checkpointing:
-        controlnet.enable_gradient_checkpointing()
+        # controlnet.enable_gradient_checkpointing()
+        pass
 
     # Check that all trainable models are in full precision
     low_precision_error_string = (
@@ -945,10 +849,10 @@ def main(args):
         " doing mixed precision training, copy of the weights should still be float32."
     )
 
-    if unwrap_model(controlnet).dtype != torch.float32:
-        raise ValueError(
-            f"Controlnet loaded as datatype {unwrap_model(controlnet).dtype}. {low_precision_error_string}"
-        )
+    # if unwrap_model(controlnet).dtype != torch.float32:
+    #     raise ValueError(
+    #         f"Controlnet loaded as datatype {unwrap_model(controlnet).dtype}. {low_precision_error_string}"
+    #     )
 
     # Enable TF32 for faster training on Ampere GPUs,
     # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
@@ -974,8 +878,9 @@ def main(args):
         optimizer_class = torch.optim.AdamW
 
     # Optimizer creation
-    params_to_optimize = controlnet.parameters()
-
+    # params_to_optimize = (list(model.unet_garm.parameters()) + list(model.unet_vton.parameters()) + list(model.vae.parameters()))
+    # params_to_optimize = (list(model.unet_garm.parameters()) + list(model.unet_vton.parameters()))
+    params_to_optimize = model.unet_garm.parameters()
     optimizer = optimizer_class(
         params_to_optimize,
         lr=args.learning_rate,
@@ -988,7 +893,8 @@ def main(args):
         assert "Please provide correct data root"
     # train_dataset = make_train_dataset(args, tokenizer, accelerator)
     train_dataset = CPDataset(args.dataroot, args.resolution, mode="train", data_list=args.data_list)
-
+    
+    # TODO: Rewrite the collate_fn
     def collate_fn_cp(examples):
         pixel_values = torch.stack([example["inpaint_image"] for example in examples])
         pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
@@ -1020,7 +926,7 @@ def main(args):
             return inputs.input_ids
 
         input_ids = tokenize_captions_internal(examples)
-        # TODO: AN revise this part to integrate tokenize in dataset instead of this hacky way
+        # TODO: An revise this part to integrate tokenize in dataset instead of this hacky way
         input_ids = torch.stack([example for example in input_ids])
 
         return {
@@ -1033,7 +939,7 @@ def main(args):
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         shuffle=True,
-        collate_fn=collate_fn_cp,
+        # collate_fn=collate_fn_cp,
         batch_size=args.train_batch_size,
         num_workers=args.dataloader_num_workers,
     )
@@ -1054,9 +960,18 @@ def main(args):
         power=args.lr_power,
     )
 
+    model.vae.requires_grad_(False)
+    model.text_encoder.requires_grad_(False)
+    model.image_encoder.requires_grad_(False)
+    # TODO: choose training parts by args
+    model.unet_garm.train()
+    # model.unet_garm.requires_grad_(False)
+    # model.unet_vton.train()
+    model.unet_vton.requires_grad_(False)
+
     # Prepare everything with our `accelerator`.
-    controlnet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        controlnet, optimizer, train_dataloader, lr_scheduler
+    model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        model, optimizer, train_dataloader, lr_scheduler
     )
 
     # For mixed precision training we cast the text_encoder and vae weights to half-precision
@@ -1068,9 +983,10 @@ def main(args):
         weight_dtype = torch.bfloat16
 
     # Move vae, unet and text_encoder to device and cast to weight_dtype
-    vae.to(accelerator.device, dtype=weight_dtype)
-    unet.to(accelerator.device, dtype=weight_dtype)
-    text_encoder.to(accelerator.device, dtype=weight_dtype)
+    model.vae.to(accelerator.device, dtype=weight_dtype)
+    # model.unet_garm.to(accelerator.device, dtype=weight_dtype)
+    model.unet_vton.to(accelerator.device, dtype=weight_dtype)
+    model.text_encoder.to(accelerator.device, dtype=weight_dtype)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -1083,11 +999,6 @@ def main(args):
     # The trackers initializes automatically on the main process.
     if accelerator.is_main_process:
         tracker_config = dict(vars(args))
-
-        # tensorboard cannot handle list types for config
-        tracker_config.pop("validation_prompt")
-        tracker_config.pop("validation_image")
-
         accelerator.init_trackers(args.tracker_project_name, config=tracker_config)
 
     # Train!
@@ -1142,122 +1053,99 @@ def main(args):
     image_logs = None
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
-            with accelerator.accumulate(controlnet):
-                # Convert images to latent space
-                latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
-                latents_garm = vae.encode(batch["pixel_values_garm"].to(dtype=weight_dtype)).latent_dist.sample()
-                latents = latents * vae.config.scaling_factor
-
-                # Sample noise that we'll add to the latents
-                noise = torch.randn_like(latents)
-                bsz = latents.shape[0]
-                # Sample a random timestep for each image
-                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
-                timesteps = timesteps.long()
-
-                # Add noise to the latents according to the noise magnitude at each timestep
-                # (this is the forward diffusion process)
-                noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
-                noisy_latents_garm = noise_scheduler.add_noise(latents_garm, noise, timesteps)
-                # Get the text embedding for conditioning
-                encoder_hidden_states = text_encoder(batch["input_ids"], return_dict=False)[0]
-
-                controlnet_image = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
-
-                down_block_res_samples, mid_block_res_sample = controlnet(
-                    noisy_latents_garm,
-                    timesteps,
-                    encoder_hidden_states=encoder_hidden_states,
-                    controlnet_cond=controlnet_image,
-                    return_dict=False,
-                )
-
-                # Predict the noise residual
-                model_pred = unet(
-                    noisy_latents,
-                    timesteps,
-                    encoder_hidden_states=encoder_hidden_states,
-                    down_block_additional_residuals=[
-                        sample.to(dtype=weight_dtype) for sample in down_block_res_samples
-                    ],
-                    mid_block_additional_residual=mid_block_res_sample.to(dtype=weight_dtype),
-                    return_dict=False,
-                )[0]
-
-                # Get the target for loss depending on the prediction type
-                if noise_scheduler.config.prediction_type == "epsilon":
-                    target = noise
-                elif noise_scheduler.config.prediction_type == "v_prediction":
-                    target = noise_scheduler.get_velocity(latents, noise, timesteps)
-                else:
-                    raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
-                loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
-
-                accelerator.backward(loss)
-                if accelerator.sync_gradients:
-                    params_to_clip = controlnet.parameters()
-                    accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
+            with accelerator.autocast():
+            # with torch.autocast("cuda"):
+                image_garm = batch["ref_imgs"]
+                image_vton = batch["inpaint_image"]
+                image_ori = batch["GT"]
+                mask = batch["inpaint_mask"]
+                prompt = batch["prompt"]
                 
+                noise_pred, noise = model(
+                    image_garm = image_garm,
+                    image_vton = image_vton,
+                    image_ori = image_ori,
+                    mask = mask,
+                    prompt = prompt,                
+                    args = args
+                )
+                
+                loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
+                # TODO: Are these latents x0 or xt-1?
+                # Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
+                # extra_step_kwargs = model.prepare_extra_step_kwargs(generator, args.eta)
+                # compute the previous noisy sample x_t -> x_t-1
+                # latents = model.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
+                
+                accelerator.backward(loss)
+                # loss.backward()
+                # TODO: Do we need to clip gradients?
+                # if accelerator.sync_gradients:
+                #     unet_garm_grad_norm = accelerator.clip_grad_norm_(model.unet_garm.parameters(), args.max_grad_norm)
+                    # unet_vton_grad_norm = accelerator.clip_grad_norm_(model.unet_vton.parameters(), args.max_grad_norm)
+                    # unet_vae_grad_norm = accelerator.clip_grad_norm_(model.vae.parameters(), args.max_grad_norm)  
+                    
                 # TODO: log the collected gradients
                 grad_dict = []
                 non_leaf_pars = []
-                for p in list(controlnet.parameters()):
+                for p in list(model.unet_garm.parameters()):
                     if not p.requires_grad:
                         raise ValueError("A parameter didn't require grad!")
                     elif not p.is_leaf:
                         non_leaf_pars.append(p)
                     elif p.grad is None:
-                        raise ValueError(f"A parameter's grad is None! Is Leaf: {p.is_leaf}")
+                        grad_dict.append(p.grad)
                     else:
-                        grad_dict.append(p.grad.abs().mean())  
-                        
+                        grad_dict.append(p.grad.abs().mean()) 
+                # FIXME: training step didn't move on
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=args.set_grads_to_none)
 
             # Checks if the accelerator has performed an optimization step behind the scenes
-            if accelerator.sync_gradients:
-                progress_bar.update(1)
-                global_step += 1
+            # if accelerator.sync_gradients:
+            #     progress_bar.update(1)
+            #     global_step += 1
 
-                if accelerator.is_main_process:
-                    if global_step % args.checkpointing_steps == 0:
-                        # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
-                        if args.checkpoints_total_limit is not None:
-                            checkpoints = os.listdir(args.output_dir)
-                            checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
-                            checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
+            #     if accelerator.is_main_process:
+            #         if global_step % args.checkpointing_steps == 0:
+            #             # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
+            #             if args.checkpoints_total_limit is not None:
+            #                 checkpoints = os.listdir(args.output_dir)
+            #                 checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
+            #                 checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
 
-                            # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
-                            if len(checkpoints) >= args.checkpoints_total_limit:
-                                num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
-                                removing_checkpoints = checkpoints[0:num_to_remove]
+            #                 # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
+            #                 if len(checkpoints) >= args.checkpoints_total_limit:
+            #                     num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
+            #                     removing_checkpoints = checkpoints[0:num_to_remove]
 
-                                logger.info(
-                                    f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
-                                )
-                                logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
+            #                     logger.info(
+            #                         f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
+            #                     )
+            #                     logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
 
-                                for removing_checkpoint in removing_checkpoints:
-                                    removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
-                                    shutil.rmtree(removing_checkpoint)
+            #                     for removing_checkpoint in removing_checkpoints:
+            #                         removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
+            #                         shutil.rmtree(removing_checkpoint)
 
-                        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-                        accelerator.save_state(save_path)
-                        logger.info(f"Saved state to {save_path}")
+            #             save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+            #             accelerator.save_state(save_path)
+            #             logger.info(f"Saved state to {save_path}")
 
-                    if args.validation_prompt is not None and global_step % args.validation_steps == 0:
-                        image_logs = log_validation(
-                            vae,
-                            text_encoder,
-                            tokenizer,
-                            unet,
-                            controlnet,
-                            args,
-                            accelerator,
-                            weight_dtype,
-                            global_step,
-                        )
+            #         if args.validation_prompt is not None and global_step % args.validation_steps == 0:
+            #             # TODO: Rewrite the log
+            #             image_logs = log_validation(
+            #                 model.vae,
+            #                 model.text_encoder,
+            #                 tokenizer,
+            #                 model.unet,
+            #                 controlnet,
+            #                 args,
+            #                 accelerator,
+            #                 weight_dtype,
+            #                 global_step,
+            #             )
 
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
@@ -1267,24 +1155,24 @@ def main(args):
                 break
 
     # Create the pipeline using the trained modules and save it.
-    accelerator.wait_for_everyone()
-    if accelerator.is_main_process:
-        controlnet = unwrap_model(controlnet)
-        controlnet.save_pretrained(args.output_dir)
+    # accelerator.wait_for_everyone()
+    # if accelerator.is_main_process:
+    #     controlnet = unwrap_model(controlnet)
+    #     controlnet.save_pretrained(args.output_dir)
 
-        if args.push_to_hub:
-            save_model_card(
-                repo_id,
-                image_logs=image_logs,
-                base_model=args.pretrained_model_name_or_path,
-                repo_folder=args.output_dir,
-            )
-            upload_folder(
-                repo_id=repo_id,
-                folder_path=args.output_dir,
-                commit_message="End of training",
-                ignore_patterns=["step_*", "epoch_*"],
-            )
+    #     if args.push_to_hub:
+    #         save_model_card(
+    #             repo_id,
+    #             image_logs=image_logs,
+    #             base_model=args.pretrained_model_name_or_path,
+    #             repo_folder=args.output_dir,
+    #         )
+    #         upload_folder(
+    #             repo_id=repo_id,
+    #             folder_path=args.output_dir,
+    #             commit_message="End of training",
+    #             ignore_patterns=["step_*", "epoch_*"],
+    #         )
 
     accelerator.end_training()
 

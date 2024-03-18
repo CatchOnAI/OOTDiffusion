@@ -24,10 +24,10 @@ import torch.nn.functional as F
 from transformers import AutoProcessor, CLIPVisionModelWithProjection
 from transformers import CLIPTextModel, CLIPTokenizer
 
-VIT_PATH = "../checkpoints/clip-vit-large-patch14"
-VAE_PATH = "../checkpoints/ootd"
-UNET_PATH = "../checkpoints/ootd/ootd_hd/checkpoint-36000"
-MODEL_PATH = "../checkpoints/ootd"
+VIT_PATH = "openai/clip-vit-large-patch14"
+VAE_PATH = "/home/stevexu/VSprojects/OOTDiffusion/checkpoints/ootd"
+UNET_PATH = "/home/stevexu/VSprojects/OOTDiffusion/checkpoints/ootd/ootd_hd/checkpoint-36000"
+MODEL_PATH = "/home/stevexu/VSprojects/OOTDiffusion/checkpoints/ootd"
 
 class OOTDiffusionHD:
 
@@ -39,19 +39,35 @@ class OOTDiffusionHD:
             subfolder="vae",
             torch_dtype=torch.float16,
         )
-
+        
+        # FIXME: check if parameters in the model are leaf?
+        if all(p.is_leaf for p in vae.parameters()):
+            # raise ValueError(f"Model parameters are all leaf.")
+            print(f"{__name__},loaded VAE parameters are all leaf.")
+        
         unet_garm = UNetGarm2DConditionModel.from_pretrained(
             UNET_PATH,
             subfolder="unet_garm",
             torch_dtype=torch.float16,
             use_safetensors=True,
         )
+
+        # FIXME: check if parameters in the model are leaf?
+        if all(p.is_leaf for p in vae.parameters()):
+            # raise ValueError(f"Model parameters are all leaf.")
+            print(f"{__name__},loaded unet_garm parameters are all leaf.")
+
         unet_vton = UNetVton2DConditionModel.from_pretrained(
             UNET_PATH,
             subfolder="unet_vton",
             torch_dtype=torch.float16,
             use_safetensors=True,
         )
+
+        # FIXME: check if parameters in the model are leaf?
+        if all(p.is_leaf for p in vae.parameters()):
+            # raise ValueError(f"Model parameters are all leaf.")
+            print(f"{__name__},loaded unet_vton parameters are all leaf.")
 
         self.pipe = OotdPipeline.from_pretrained(
             MODEL_PATH,
