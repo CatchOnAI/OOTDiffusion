@@ -16,4 +16,5 @@ accelerate launch train_ootd.py \
     --enable_xformers_memory_efficient_attention \
     --validation_steps="100" \
     --inference_steps="50" \
+    --log_grads \
     --report_to="wandb" 

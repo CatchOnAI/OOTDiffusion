@@ -20,6 +20,7 @@ import os
 import random
 import shutil
 from pathlib import Path
+from collections import defaultdict
 
 import accelerate
 import numpy as np
@@ -525,6 +526,11 @@ def parse_args(input_args=None):
         default=20,
     )
 
+    parser.add_argument(
+        "--log_grads",
+        action="store_true", help="Whether log the gradients of trained parts."
+    )
+
     if input_args is not None:
         args = parser.parse_args(input_args)
     else:
@@ -963,6 +969,7 @@ def main(args):
     model.vae.requires_grad_(False)
     model.text_encoder.requires_grad_(False)
     model.image_encoder.requires_grad_(False)
+
     # TODO: choose training parts by args
     model.unet_garm.train()
     # model.unet_garm.requires_grad_(False)
@@ -974,7 +981,7 @@ def main(args):
         model, optimizer, train_dataloader, test_dataloader, lr_scheduler
     )
 
-    # For mixed precision training we cast the text_encoder and vae weights to half-precision
+    # For mixed precision training we cast untrained weights to half-precision
     # as these models are only used for inference, keeping weights in full precision is not required.
     weight_dtype = torch.float32
     if accelerator.mixed_precision == "fp16":
@@ -982,7 +989,6 @@ def main(args):
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
 
-    # Move vae, unet and text_encoder to device and cast to weight_dtype
     model.vae.to(accelerator.device, dtype=weight_dtype)
     # model.unet_garm.to(accelerator.device, dtype=weight_dtype)
     model.unet_vton.to(accelerator.device, dtype=weight_dtype)
@@ -1051,6 +1057,9 @@ def main(args):
     )
 
     image_logs = None
+    unet_garm_grad_dict = defaultdict(list)
+    unet_vton_grad_dict = defaultdict(list)
+    vae_grad_dict = defaultdict(list)
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
             with accelerator.autocast():
@@ -1085,17 +1094,33 @@ def main(args):
                     # unet_vae_grad_norm = accelerator.clip_grad_norm_(model.vae.parameters(), args.max_grad_norm)  
                     
                 # TODO: log the collected gradients
-                grad_dict = []
-                non_leaf_pars = []
-                for p in list(model.unet_garm.parameters()):
-                    if not p.requires_grad:
-                        raise ValueError("A parameter didn't require grad!")
-                    elif not p.is_leaf:
-                        non_leaf_pars.append(p)
-                    elif p.grad is None:
-                        grad_dict.append(p.grad)
-                    else:
-                        grad_dict.append(p.grad.abs().mean()) 
+                if args.log_grads:
+                    if model.unet_garm.training:
+                        for name, block in model.unet_garm.named_children():
+                            grad = torch.tensor(0.0).to(accelerator.device)
+                            for p in block.parameters():
+                                if p.grad is not None:
+                                    grad += p.norm()
+                            unet_garm_grad_dict[name+'.grad'] = grad.detach().item()
+                        accelerator.log(unet_garm_grad_dict, step=global_step)
+                    
+                    if model.unet_vton.training:
+                        for name, block in model.unet_vton.named_children():
+                            grad = torch.tensor(0.0).to(accelerator.device)
+                            for p in block.parameters():
+                                if p.grad is not None:
+                                    grad += p.norm()
+                            unet_vton_grad_dict[name+'.grad'] = grad.detach().item()
+                        accelerator.log(unet_vton_grad_dict, step=global_step)
+                    
+                    if model.vae.training:
+                        for name, block in model.vae.named_children():
+                            grad = torch.tensor(0.0).to(accelerator.device)
+                            for p in block.parameters():
+                                if p.grad is not None:
+                                    grad += p.norm()
+                            vae_grad_dict[name+'.grad'] = grad.detach().item()
+                        accelerator.log(vae_grad_dict, step=global_step)
 
                 optimizer.step()
                 lr_scheduler.step()
