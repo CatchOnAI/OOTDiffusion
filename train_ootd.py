@@ -64,6 +64,7 @@ from data_scripts.cp_dataset import CPDataset
 import wandb
 
 from ootd.train_ootd_hd import OOTDiffusionHD
+from ootd.pipelines_ootd.pipeline_ootd import OotdPipeline as OotdPipelineInference
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 # check_min_version("0.27.0.dev0")
@@ -82,18 +83,16 @@ def image_grid(imgs, rows, cols):
     return grid
 
 
-def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, accelerator, weight_dtype, step):
+def log_validation(model, args, accelerator, weight_dtype, test_dataloder):
     logger.info("Running validation... ")
 
-    controlnet = accelerator.unwrap_model(controlnet)
-
-    pipeline = StableDiffusionControlNetPipeline.from_pretrained(
+    pipeline = OotdPipelineInference.from_pretrained(
         args.pretrained_model_name_or_path,
-        vae=vae,
-        text_encoder=text_encoder,
-        tokenizer=tokenizer,
-        unet=unet,
-        controlnet=controlnet,
+        vae=model.vae,
+        text_encoder=model.text_encoder,
+        tokenizer=model.tokenizer,
+        unet_garm=model.unet_garm,
+        unet_vton=model.unet_vton,
         safety_checker=None,
         revision=args.revision,
         variant=args.variant,
@@ -111,54 +110,35 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
     else:
         generator = torch.Generator(device=accelerator.device).manual_seed(args.seed)
 
-    if len(args.validation_image) == len(args.validation_prompt):
-        validation_images = args.validation_image
-        validation_prompts = args.validation_prompt
-    elif len(args.validation_image) == 1:
-        validation_images = args.validation_image * len(args.validation_prompt)
-        validation_prompts = args.validation_prompt
-    elif len(args.validation_prompt) == 1:
-        validation_images = args.validation_image
-        validation_prompts = args.validation_prompt * len(args.validation_image)
-    else:
-        raise ValueError(
-            "number of `args.validation_image` and `args.validation_prompt` should be checked in `parse_args`"
-        )
-
     image_logs = []
-
-    for validation_prompt, validation_image in zip(validation_prompts, validation_images):
-        validation_image = Image.open(validation_image).convert("RGB")
-
-        images = []
-
-        for _ in range(args.num_validation_images):
+    with torch.no_grad():
+        for _, batch in enumerate(test_dataloder):
             with torch.autocast("cuda"):
-                image = pipeline(
-                    validation_prompt, validation_image, num_inference_steps=20, generator=generator
+                prompt = batch["prompt"]
+                image_garm = batch["ref_imgs"]
+                image_vton = batch["inpaint_image"]
+                image_ori= batch["GT"]
+                mask = batch["inpaint_mask"]
+
+                samples = pipeline(
+                    prompt,
+                    image_garm,
+                    image_vton,
+                    mask,
+                    image_ori,
+                    num_inference_steps=args.inference_steps,
+                    generator=generator,
                 ).images[0]
-
-            images.append(image)
-
-        image_logs.append(
-            {"validation_image": validation_image, "images": images, "validation_prompt": validation_prompt}
-        )
+            image_logs.append({"garment": image_garm, "model": image_vton, "orig_img": image_ori, "samples": samples, "prompt": prompt})
 
     for tracker in accelerator.trackers:
         if tracker.name == "wandb":
             formatted_images = []
-
             for log in image_logs:
-                images = log["images"]
-                validation_prompt = log["validation_prompt"]
-                validation_image = log["validation_image"]
-
-                formatted_images.append(wandb.Image(validation_image, caption="Controlnet conditioning"))
-
-                for image in images:
-                    image = wandb.Image(image, caption=validation_prompt)
-                    formatted_images.append(image)
-
+                formatted_images.append(wandb.Image(log["garment"], caption="garment images"))
+                formatted_images.append(wandb.Image(log["model"], caption="masked model images"))
+                formatted_images.append(wandb.Image(log["orig_img"], caption="original images"))
+                formatted_images.append(wandb.Image(log["samples"], caption=log["prompt"]))
             tracker.log({"validation": formatted_images})
         else:
             logger.warn(f"image logging not implemented for {tracker.name}")
@@ -521,16 +501,28 @@ def parse_args(input_args=None):
     )
 
     parser.add_argument(
-        "--data_list",
+        "--train_data_list",
         type=str,
         default=None,
     )
 
-    # How to set up for multiple GPUs?
+    parser.add_argument(
+        "--test_data_list",
+        type=str,
+        default=None,
+    )
+
+    #TODO: How to set up for multiple GPUs?
     parser.add_argument(
         "--gpu_id",
         type=int,
         default=0,
+    )
+
+    parser.add_argument(
+        "--inference_steps",
+        type=int,
+        default=20,
     )
 
     if input_args is not None:
@@ -892,7 +884,8 @@ def main(args):
     if args.dataroot is None:
         assert "Please provide correct data root"
     # train_dataset = make_train_dataset(args, tokenizer, accelerator)
-    train_dataset = CPDataset(args.dataroot, args.resolution, mode="train", data_list=args.data_list)
+    train_dataset = CPDataset(args.dataroot, args.resolution, mode="train", data_list=args.train_data_list)
+    test_dataset = CPDataset(args.dataroot, args.resolution, mode="test", data_list=args.test_data_list)
     
     # TODO: Rewrite the collate_fn
     def collate_fn_cp(examples):
@@ -943,6 +936,13 @@ def main(args):
         batch_size=args.train_batch_size,
         num_workers=args.dataloader_num_workers,
     )
+    test_dataloader = torch.utils.data.DataLoader(
+        test_dataset,
+        shuffle=True,
+        # collate_fn=collate_fn_cp,
+        batch_size=args.train_batch_size,
+        num_workers=args.dataloader_num_workers,
+    )
 
     # Scheduler and math around the number of training steps.
     overrode_max_train_steps = False
@@ -970,8 +970,8 @@ def main(args):
     model.unet_vton.requires_grad_(False)
 
     # Prepare everything with our `accelerator`.
-    model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, lr_scheduler
+    model, optimizer, train_dataloader, test_dataloader, lr_scheduler = accelerator.prepare(
+        model, optimizer, train_dataloader, test_dataloader, lr_scheduler
     )
 
     # For mixed precision training we cast the text_encoder and vae weights to half-precision
@@ -1078,7 +1078,6 @@ def main(args):
                 # latents = model.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
                 
                 accelerator.backward(loss)
-                # loss.backward()
                 # TODO: Do we need to clip gradients?
                 # if accelerator.sync_gradients:
                 #     unet_garm_grad_norm = accelerator.clip_grad_norm_(model.unet_garm.parameters(), args.max_grad_norm)
@@ -1097,55 +1096,52 @@ def main(args):
                         grad_dict.append(p.grad)
                     else:
                         grad_dict.append(p.grad.abs().mean()) 
-                # FIXME: training step didn't move on
+
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=args.set_grads_to_none)
 
             # Checks if the accelerator has performed an optimization step behind the scenes
-            # if accelerator.sync_gradients:
-            #     progress_bar.update(1)
-            #     global_step += 1
+            if accelerator.sync_gradients:
+                progress_bar.update(1)
+                global_step += 1
 
-            #     if accelerator.is_main_process:
-            #         if global_step % args.checkpointing_steps == 0:
-            #             # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
-            #             if args.checkpoints_total_limit is not None:
-            #                 checkpoints = os.listdir(args.output_dir)
-            #                 checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
-            #                 checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
+                if accelerator.is_main_process:
+                    # Save the checkpoint
+                    if global_step % args.checkpointing_steps == 0:
+                        # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
+                        if args.checkpoints_total_limit is not None:
+                            checkpoints = os.listdir(args.output_dir)
+                            checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
+                            checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
 
-            #                 # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
-            #                 if len(checkpoints) >= args.checkpoints_total_limit:
-            #                     num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
-            #                     removing_checkpoints = checkpoints[0:num_to_remove]
+                            # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
+                            if len(checkpoints) >= args.checkpoints_total_limit:
+                                num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
+                                removing_checkpoints = checkpoints[0:num_to_remove]
 
-            #                     logger.info(
-            #                         f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
-            #                     )
-            #                     logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
+                                logger.info(
+                                    f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
+                                )
+                                logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
 
-            #                     for removing_checkpoint in removing_checkpoints:
-            #                         removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
-            #                         shutil.rmtree(removing_checkpoint)
+                                for removing_checkpoint in removing_checkpoints:
+                                    removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
+                                    shutil.rmtree(removing_checkpoint)
 
-            #             save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-            #             accelerator.save_state(save_path)
-            #             logger.info(f"Saved state to {save_path}")
+                        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+                        accelerator.save_state(save_path)
+                        logger.info(f"Saved state to {save_path}")
 
-            #         if args.validation_prompt is not None and global_step % args.validation_steps == 0:
-            #             # TODO: Rewrite the log
-            #             image_logs = log_validation(
-            #                 model.vae,
-            #                 model.text_encoder,
-            #                 tokenizer,
-            #                 model.unet,
-            #                 controlnet,
-            #                 args,
-            #                 accelerator,
-            #                 weight_dtype,
-            #                 global_step,
-            #             )
+                    if global_step % args.validation_steps == 0:
+                        # TODO: Rewrite the log
+                        image_logs = log_validation(
+                            model,
+                            args,
+                            accelerator,
+                            weight_dtype,
+                            test_dataloader,
+                        )
 
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}
             progress_bar.set_postfix(**logs)
@@ -1156,23 +1152,23 @@ def main(args):
 
     # Create the pipeline using the trained modules and save it.
     # accelerator.wait_for_everyone()
-    # if accelerator.is_main_process:
-    #     controlnet = unwrap_model(controlnet)
-    #     controlnet.save_pretrained(args.output_dir)
+    if accelerator.is_main_process:
+        controlnet = accelerate.unwrap_model(controlnet)
+        controlnet.save_pretrained(args.output_dir)
 
-    #     if args.push_to_hub:
-    #         save_model_card(
-    #             repo_id,
-    #             image_logs=image_logs,
-    #             base_model=args.pretrained_model_name_or_path,
-    #             repo_folder=args.output_dir,
-    #         )
-    #         upload_folder(
-    #             repo_id=repo_id,
-    #             folder_path=args.output_dir,
-    #             commit_message="End of training",
-    #             ignore_patterns=["step_*", "epoch_*"],
-    #         )
+        if args.push_to_hub:
+            save_model_card(
+                repo_id,
+                image_logs=image_logs,
+                base_model=args.pretrained_model_name_or_path,
+                repo_folder=args.output_dir,
+            )
+            upload_folder(
+                repo_id=repo_id,
+                folder_path=args.output_dir,
+                commit_message="End of training",
+                ignore_patterns=["step_*", "epoch_*"],
+            )
 
     accelerator.end_training()
 

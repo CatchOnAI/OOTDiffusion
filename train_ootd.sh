@@ -7,6 +7,13 @@ accelerate launch train_ootd.py \
     --learning_rate="1e-5" \
     --train_batch_size="1" \
     --dataroot="/home/stevexu/data/VITON-HD" \
-    --data_list="subtrain_0.1.txt" \
-    --num_train_epochs="10" 
-    # --report_to="wandb"
+    --train_data_list="subtrain_0.1.txt" \
+    --test_data_list="subtest_0.1.txt" \
+    --num_train_epochs="100" \
+    --checkpointing_steps="500" \
+    --use_8bit_adam \
+    --gradient_checkpointing \
+    --enable_xformers_memory_efficient_attention \
+    --validation_steps="100" \
+    --inference_steps="50" \
+    --report_to="wandb" 

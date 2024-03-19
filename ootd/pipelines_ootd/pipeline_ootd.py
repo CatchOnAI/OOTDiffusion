@@ -291,12 +291,13 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
         image_garm = self.image_processor.preprocess(image_garm)
         image_vton = self.image_processor.preprocess(image_vton)
         image_ori = self.image_processor.preprocess(image_ori)
-        mask = np.array(mask)
-        mask[mask < 127] = 0
-        mask[mask >= 127] = 255
-        mask = torch.tensor(mask)
-        mask = mask / 255
-        mask = mask.reshape(-1, 1, mask.size(-2), mask.size(-1))
+        # mask = np.array(mask)
+        # mask[mask < 127] = 0
+        # mask[mask >= 127] = 255
+        # mask = torch.tensor(mask)
+        # mask = mask / 255
+        # mask = mask.reshape(-1, 1, mask.size(-2), mask.size(-1))
+        mask = self.image_processor.preprocess(mask)
 
         # 4. set timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)
