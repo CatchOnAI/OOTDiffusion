@@ -72,7 +72,7 @@ def main(num_workers=2):
     print(f"takes {end - start}")
 
 if __name__ == "__main__":
-    num_workers = 1
+    num_workers = 8
     main(num_workers)
     
    
