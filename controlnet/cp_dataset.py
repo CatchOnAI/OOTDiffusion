@@ -32,9 +32,9 @@ def mask2bbox(mask):
     right = int(min(right * (1 + factor) - center[1] * factor + 1, mask.shape[1]))
     return (down, up, left, right)
 
-debug_mode=True
+debug_mode=False
 
-def tensor_to_image(tensor, image_path):
+def tensor_to_image(tensor, image_path, is_print=False):
     """
     Convert a torch tensor to an image file.
 
@@ -45,7 +45,7 @@ def tensor_to_image(tensor, image_path):
     Returns:
     - None
     """
-    if debug_mode: 
+    if debug_mode or is_print: 
         # Check the tensor dimensions. If it's a batch, take the first image
         if len(tensor.shape) == 4:
             tensor = tensor[0]
@@ -342,6 +342,11 @@ class CPDataset(data.Dataset):
             caption_string = "A cloth"  # Set caption_string to an empty string or handle the case when the file doesn't exist
 
         c_img = np.array(c_img).astype(np.uint8)
+        
+        tensor_to_image(inpaint_warp_cloth, "./sample/inpaint_image.png", self.datamode is "test")
+        tensor_to_image(1-inpaint_mask, "./sample/inpaint_mask.png", self.datamode is "test")
+        tensor_to_image(im, "./sample/GT.png", self.datamode is "test")
+        tensor_to_image(ref_image, "./sample/ref_image.png", self.datamode is "test")
         result = {
             "GT": im,
             "inpaint_image": inpaint_warp_cloth,
@@ -408,7 +413,7 @@ def pre_alignment(c, cm, parse_roi):
 
 
 if __name__ == "__main__":
-    dataset = CPDataset("/data/user/gjh/VITON-HD", 512, mode="train", unpaired=False)
-    loader = DataLoader(dataset, batch_size=4, shuffle=False, num_workers=4)
+    dataset = CPDataset("/home/ubuntu/OOTDiffusion/controlnet/data/VITON-HD", 512, mode="test", data_list="test_pairs.txt", unpaired=True)
+    loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=1)
     for data in loader:
         pass

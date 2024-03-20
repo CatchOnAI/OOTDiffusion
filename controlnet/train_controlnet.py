@@ -15,6 +15,7 @@
 
 import argparse
 import logging
+import itertools
 import math
 import os
 import random
@@ -111,17 +112,14 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
         validation_images = args.validation_image
         validation_prompts = args.validation_prompt
         validation_images_garm = args.validation_image_garm
-        validation_original_images = args.validation_original_image
     elif len(args.validation_image) == 1:
         validation_images = args.validation_image * len(args.validation_prompt)
         validation_prompts = args.validation_prompt
         validation_images_garm = args.validation_image_garm
-        validation_original_images = args.validation_original_image
     elif len(args.validation_prompt) == 1:
         validation_images = args.validation_image
         validation_prompts = args.validation_prompt * len(args.validation_image)
         validation_images_garm = args.validation_image_garm
-        validation_original_images = args.validation_original_image
     else:
         raise ValueError(
             "number of `args.validation_image` and `args.validation_prompt` should be checked in `parse_args`"
@@ -142,8 +140,11 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
         mask_gray = mask_gray.resize((768, 1024), Image.NEAREST)
         
         masked_vton_img = Image.composite(mask_gray, validation_image, mask)
-        masked_vton_img.save('./internal/sample_mask.jpg')
-
+        masked_vton_img.save('./debug/sample_mask.jpg')
+        mask.save('./debug/mask.jpg')
+        validation_image_garm.save('./debug/validation_image_garm.jpg')
+        validation_image.save('./debug/validation_image.jpg')
+        
         images = []
 
         for _ in range(args.num_validation_images):
@@ -630,6 +631,11 @@ def parse_args(input_args=None):
         type=str,
         default=None,
     )
+    parser.add_argument(
+        "--train_base",
+        type=bool,
+        default=False,
+    )
     
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -1057,7 +1063,16 @@ def main(args):
         optimizer_class = torch.optim.AdamW
 
     # Optimizer creation
-    params_to_optimize = controlnet.parameters()
+    
+    controlnet.requires_grad_(True)
+    # unet.requires_grad_(True)
+    
+    params_to_optimize = list(filter(lambda p: p.requires_grad, controlnet.parameters()))
+    if args.train_base:
+        params_to_optimize = params_to_optimize + list(filter(lambda p: p.requires_grad, unet.parameters()))
+    
+    print(f"trainable params number: {len(params_to_optimize)}")
+    
     optimizer = optimizer_class(
         params_to_optimize,
         lr=args.learning_rate,
