@@ -338,7 +338,7 @@ class CPDataset(data.Dataset):
             with open(caption_name, 'r') as file:
                 caption_string = file.read()
         else:
-            print("File does not exist.")
+            print("Caption File does not exist.")
             caption_string = "A cloth"  # Set caption_string to an empty string or handle the case when the file doesn't exist
 
         c_img = np.array(c_img).astype(np.uint8)

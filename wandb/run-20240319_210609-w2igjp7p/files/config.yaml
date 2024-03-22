@@ -1,0 +1,218 @@
+wandb_version: 1
+
+_wandb:
+  desc: null
+  value:
+    python_version: 3.10.0
+    cli_version: 0.16.3
+    framework: huggingface
+    huggingface_version: 4.26.1
+    is_jupyter_run: false
+    is_kaggle_kernel: false
+    start_time: 1710907569.688262
+    t:
+      1:
+      - 1
+      - 11
+      - 41
+      - 49
+      - 55
+      - 71
+      - 83
+      - 105
+      2:
+      - 1
+      - 11
+      - 41
+      - 49
+      - 55
+      - 71
+      - 83
+      - 105
+      3:
+      - 23
+      4: 3.10.0
+      5: 0.16.3
+      6: 4.26.1
+      8:
+      - 5
+      13: linux-x86_64
+pretrained_model_name_or_path:
+  desc: null
+  value: runwayml/stable-diffusion-v1-5
+controlnet_model_name_or_path:
+  desc: null
+  value: null
+revision:
+  desc: null
+  value: null
+variant:
+  desc: null
+  value: null
+tokenizer_name:
+  desc: null
+  value: null
+output_dir:
+  desc: null
+  value: output
+cache_dir:
+  desc: null
+  value: null
+seed:
+  desc: null
+  value: null
+resolution:
+  desc: null
+  value: 512
+train_batch_size:
+  desc: null
+  value: 4
+num_train_epochs:
+  desc: null
+  value: 1
+max_train_steps:
+  desc: null
+  value: 2912
+checkpointing_steps:
+  desc: null
+  value: 500
+checkpoints_total_limit:
+  desc: null
+  value: null
+resume_from_checkpoint:
+  desc: null
+  value: null
+gradient_accumulation_steps:
+  desc: null
+  value: 1
+gradient_checkpointing:
+  desc: null
+  value: false
+learning_rate:
+  desc: null
+  value: 1.0e-05
+scale_lr:
+  desc: null
+  value: false
+lr_scheduler:
+  desc: null
+  value: constant
+lr_warmup_steps:
+  desc: null
+  value: 500
+lr_num_cycles:
+  desc: null
+  value: 1
+lr_power:
+  desc: null
+  value: 1.0
+use_8bit_adam:
+  desc: null
+  value: false
+dataloader_num_workers:
+  desc: null
+  value: 0
+adam_beta1:
+  desc: null
+  value: 0.9
+adam_beta2:
+  desc: null
+  value: 0.999
+adam_weight_decay:
+  desc: null
+  value: 0.01
+adam_epsilon:
+  desc: null
+  value: 1.0e-08
+max_grad_norm:
+  desc: null
+  value: 1.0
+push_to_hub:
+  desc: null
+  value: false
+hub_token:
+  desc: null
+  value: null
+hub_model_id:
+  desc: null
+  value: null
+logging_dir:
+  desc: null
+  value: logs
+allow_tf32:
+  desc: null
+  value: false
+report_to:
+  desc: null
+  value: wandb
+mixed_precision:
+  desc: null
+  value: null
+enable_xformers_memory_efficient_attention:
+  desc: null
+  value: false
+set_grads_to_none:
+  desc: null
+  value: false
+dataset_name:
+  desc: null
+  value: SaffalPoosh/VITON-HD-test
+dataset_config_name:
+  desc: null
+  value: null
+train_data_dir:
+  desc: null
+  value: null
+image_column:
+  desc: null
+  value: image
+caption_column:
+  desc: null
+  value: text
+max_train_samples:
+  desc: null
+  value: null
+proportion_empty_prompts:
+  desc: null
+  value: 0
+validation_image_garm:
+  desc: null
+  value:
+  - ./00006_00.jpg
+validation_original_image:
+  desc: null
+  value:
+  - ./00008_00.jpg
+num_validation_images:
+  desc: null
+  value: 4
+validation_steps:
+  desc: null
+  value: 100
+tracker_project_name:
+  desc: null
+  value: train_controlnet
+cloth:
+  desc: null
+  value: null
+cloth_mask:
+  desc: null
+  value: null
+cloth_parse:
+  desc: null
+  value: null
+dense:
+  desc: null
+  value: null
+image:
+  desc: null
+  value: null
+openpose_json:
+  desc: null
+  value: null
+parse:
+  desc: null
+  value: null
+dataroot:
+  desc: null
+  value: ../data/VITON-HD

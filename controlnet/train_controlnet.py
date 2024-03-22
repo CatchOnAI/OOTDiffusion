@@ -947,7 +947,7 @@ def main(args):
     # Load scheduler and models
     noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
     text_encoder = text_encoder_cls.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, variant=args.variant
+        args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
     )
     vae = AutoencoderKL.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, variant=args.variant

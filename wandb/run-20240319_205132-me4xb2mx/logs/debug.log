@@ -1,0 +1,28 @@
+2024-03-19 20:51:32,684 INFO    MainThread:460962 [wandb_setup.py:_flush():76] Current SDK version is 0.16.3
+2024-03-19 20:51:32,684 INFO    MainThread:460962 [wandb_setup.py:_flush():76] Configure stats pid to 460962
+2024-03-19 20:51:32,684 INFO    MainThread:460962 [wandb_setup.py:_flush():76] Loading settings from /home/dwang/.config/wandb/settings
+2024-03-19 20:51:32,684 INFO    MainThread:460962 [wandb_setup.py:_flush():76] Loading settings from /opt/disk1/dwang/sci/DVTON/OOTDiffusion/wandb/settings
+2024-03-19 20:51:32,684 INFO    MainThread:460962 [wandb_setup.py:_flush():76] Loading settings from environment variables: {}
+2024-03-19 20:51:32,684 INFO    MainThread:460962 [wandb_setup.py:_flush():76] Applying setup settings: {'_disable_service': False}
+2024-03-19 20:51:32,684 INFO    MainThread:460962 [wandb_setup.py:_flush():76] Inferring run settings from compute environment: {'program_relpath': 'controlnet/train_controlnet.py', 'program_abspath': '/opt/disk1/dwang/sci/DVTON/OOTDiffusion/controlnet/train_controlnet.py', 'program': '/opt/disk1/dwang/sci/DVTON/OOTDiffusion/controlnet/train_controlnet.py'}
+2024-03-19 20:51:32,684 INFO    MainThread:460962 [wandb_init.py:_log_setup():526] Logging user logs to /opt/disk1/dwang/sci/DVTON/OOTDiffusion/wandb/run-20240319_205132-me4xb2mx/logs/debug.log
+2024-03-19 20:51:32,684 INFO    MainThread:460962 [wandb_init.py:_log_setup():527] Logging internal logs to /opt/disk1/dwang/sci/DVTON/OOTDiffusion/wandb/run-20240319_205132-me4xb2mx/logs/debug-internal.log
+2024-03-19 20:51:32,684 INFO    MainThread:460962 [wandb_init.py:init():566] calling init triggers
+2024-03-19 20:51:32,684 INFO    MainThread:460962 [wandb_init.py:init():573] wandb.init called with sweep_config: {}
+config: {}
+2024-03-19 20:51:32,684 INFO    MainThread:460962 [wandb_init.py:init():616] starting backend
+2024-03-19 20:51:32,684 INFO    MainThread:460962 [wandb_init.py:init():620] setting up manager
+2024-03-19 20:51:32,685 INFO    MainThread:460962 [backend.py:_multiprocessing_setup():105] multiprocessing start_methods=fork,spawn,forkserver, using: spawn
+2024-03-19 20:51:32,686 INFO    MainThread:460962 [wandb_init.py:init():628] backend started and connected
+2024-03-19 20:51:32,687 INFO    MainThread:460962 [wandb_init.py:init():720] updated telemetry
+2024-03-19 20:51:32,702 INFO    MainThread:460962 [wandb_init.py:init():753] communicating run to backend with 90.0 second timeout
+2024-03-19 20:51:32,902 INFO    MainThread:460962 [wandb_run.py:_on_init():2262] communicating current version
+2024-03-19 20:51:32,996 INFO    MainThread:460962 [wandb_run.py:_on_init():2271] got version response upgrade_message: "wandb version 0.16.4 is available!  To upgrade, please run:\n $ pip install wandb --upgrade"
+
+2024-03-19 20:51:32,996 INFO    MainThread:460962 [wandb_init.py:init():804] starting run threads in backend
+2024-03-19 20:51:36,342 INFO    MainThread:460962 [wandb_run.py:_console_start():2241] atexit reg
+2024-03-19 20:51:36,342 INFO    MainThread:460962 [wandb_run.py:_redirect():2096] redirect: wrap_raw
+2024-03-19 20:51:36,342 INFO    MainThread:460962 [wandb_run.py:_redirect():2161] Wrapping output streams.
+2024-03-19 20:51:36,342 INFO    MainThread:460962 [wandb_run.py:_redirect():2186] Redirects installed.
+2024-03-19 20:51:36,342 INFO    MainThread:460962 [wandb_init.py:init():847] run started, returning control to user process
+2024-03-19 20:51:36,343 INFO    MainThread:460962 [wandb_run.py:_config_callback():1343] config_cb None None {'pretrained_model_name_or_path': 'runwayml/stable-diffusion-v1-5', 'controlnet_model_name_or_path': None, 'revision': None, 'variant': None, 'tokenizer_name': None, 'output_dir': 'output', 'cache_dir': None, 'seed': None, 'resolution': 512, 'train_batch_size': 4, 'num_train_epochs': 1, 'max_train_steps': 1456, 'checkpointing_steps': 500, 'checkpoints_total_limit': None, 'resume_from_checkpoint': None, 'gradient_accumulation_steps': 1, 'gradient_checkpointing': False, 'learning_rate': 1e-05, 'scale_lr': False, 'lr_scheduler': 'constant', 'lr_warmup_steps': 500, 'lr_num_cycles': 1, 'lr_power': 1.0, 'use_8bit_adam': False, 'dataloader_num_workers': 0, 'adam_beta1': 0.9, 'adam_beta2': 0.999, 'adam_weight_decay': 0.01, 'adam_epsilon': 1e-08, 'max_grad_norm': 1.0, 'push_to_hub': False, 'hub_token': None, 'hub_model_id': None, 'logging_dir': 'logs', 'allow_tf32': False, 'report_to': 'wandb', 'mixed_precision': None, 'enable_xformers_memory_efficient_attention': False, 'set_grads_to_none': False, 'dataset_name': 'SaffalPoosh/VITON-HD-test', 'dataset_config_name': None, 'train_data_dir': None, 'image_column': 'image', 'caption_column': 'text', 'max_train_samples': None, 'proportion_empty_prompts': 0, 'validation_image_garm': ['./00006_00.jpg'], 'validation_original_image': ['./00008_00.jpg'], 'num_validation_images': 4, 'validation_steps': 100, 'tracker_project_name': 'train_controlnet', 'cloth': None, 'cloth_mask': None, 'cloth_parse': None, 'dense': None, 'image': None, 'openpose_json': None, 'parse': None, 'dataroot': '../data/VITON-HD'}
