@@ -1,1 +1,0 @@
-Put checkpoints here, including ootd, humanparsing, openpose and clip-vit-large-patch14
