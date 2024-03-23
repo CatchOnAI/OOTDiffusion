@@ -22,4 +22,4 @@ __pycache__/
 output/
 data/
 internal/
-wandb
+wandb/

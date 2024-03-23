@@ -363,7 +363,7 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
 
                 # concat latents, image_latents in the channel dimension
-                scaled_latent_model_input = self.scheduler.scale_model_input(latent_model_input, t) #
+                scaled_latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
                 latent_vton_model_input = torch.cat([scaled_latent_model_input, vton_latents], dim=1)
                 # latent_vton_model_input = scaled_latent_model_input + vton_latents
 
