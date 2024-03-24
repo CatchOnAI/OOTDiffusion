@@ -332,13 +332,13 @@ class CPDataset(data.Dataset):
         tensor_to_image(inpaint_warp_cloth, "./internal/inpaint_warp_cloth.jpg")
         
         # load captions
-        caption_name = c_name[key].replace("cloth", "cloth_caption").replace(".jpg", ".txt")
+        caption_name = osp.join(self.data_path, "cloth", c_name[key]).replace("cloth", "cloth_caption").replace(".jpg", ".txt")
         # Check if the file exists
         if os.path.exists(caption_name):
             with open(caption_name, 'r') as file:
                 caption_string = file.read()
         else:
-            print("File does not exist.")
+            print("File does not exist. ", caption_name)
             caption_string = "A cloth"  # Set caption_string to an empty string or handle the case when the file doesn't exist
 
         c_img = np.array(c_img).astype(np.uint8)
