@@ -18,3 +18,4 @@ __pycache__/
 /controlnet/data/
 /controlnet/internal/
 /controlnet/output/
+/controlnet/wandb/
