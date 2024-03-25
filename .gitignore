@@ -23,3 +23,5 @@ output/
 data/
 internal/
 wandb/
+checkpoints/
+*.jpg

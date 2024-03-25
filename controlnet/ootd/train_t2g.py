@@ -586,9 +586,17 @@ def main():
             args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, variant=args.variant
         )
 
-    unet = UNet2DConditionModel.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="unet", revision=args.non_ema_revision
-    )
+    # Load scheduler and models
+    if args.model_type == "hd":
+        # TODO: it is better to move all these paths to args or a config file.
+        model = OOTDiffusionHD(
+            args.gpu_id, 
+            vit_path="openai/clip-vit-large-patch14",
+            vae_path="checkpoints/ootd", 
+            model_path="checkpoints/ootd/ootd_hd/checkpoint-36000/unet_garm/",
+            )
+    else:
+        raise NotImplementedError(f"Model type {args.model_type} not implemented")
 
     # Freeze vae and text_encoder and set unet to trainable
     vae.requires_grad_(False)
