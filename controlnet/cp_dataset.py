@@ -206,6 +206,7 @@ class CPDataset(data.Dataset):
         im_pil_big = Image.open(osp.join(self.data_path, im_name))
         im_pil = transforms.Resize(self.crop_size, interpolation=2)(im_pil_big)
         im = self.transform(im_pil)
+        # TODO: save these to wandb
         tensor_to_image(im, "./internal/im.jpg")
 
         # load parsing image

@@ -1,3 +1,4 @@
+"""Pipeline for training OOTD"""
 # Copyright 2023 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -145,7 +146,6 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor)
         self.register_to_config(requires_safety_checker=requires_safety_checker)
 
-    @torch.no_grad()
     def __call__(
         self,
         prompt: Union[str, List[str]] = None,
@@ -271,10 +271,7 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
             batch_size = len(prompt)
         else:
             batch_size = prompt_embeds.shape[0]
-
         device = self._execution_device
-        # check if scheduler is in sigmas space
-        scheduler_is_in_sigma_space = hasattr(self.scheduler, "sigmas")
 
         # 2. Encode input prompt
         prompt_embeds = self._encode_prompt(
@@ -283,26 +280,16 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
             num_images_per_prompt,
             self.do_classifier_free_guidance,
             negative_prompt,
-            prompt_embeds=prompt_embeds,
-            negative_prompt_embeds=negative_prompt_embeds,
+            prompt_embeds=None,
+            negative_prompt_embeds=None,
         )
 
         # 3. Preprocess image
         image_garm = self.image_processor.preprocess(image_garm)
         image_vton = self.image_processor.preprocess(image_vton)
         image_ori = self.image_processor.preprocess(image_ori)
-        # mask = np.array(mask)
-        # mask[mask < 127] = 0
-        # mask[mask >= 127] = 255
-        # mask = torch.tensor(mask)
-        # mask = mask / 255
-        # mask = mask.reshape(-1, 1, mask.size(-2), mask.size(-1))
         mask = self.image_processor.preprocess(mask)
-
-        # 4. set timesteps
-        self.scheduler.set_timesteps(num_inference_steps, device=device)
-        timesteps = self.scheduler.timesteps
-
+        
         # 5. Prepare Image latents
         garm_latents = self.prepare_garm_latents(
             image_garm,
@@ -342,122 +329,37 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
             generator,
             latents,
         )
-
+        # FIXME: the noise isn't used correctly
         noise = latents.clone()
 
-        # 8. Prepare extra step kwargs. TODO: Logic should ideally just be moved out of the pipeline
-        extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
-
-        # 9. Denoising loop
-        num_warmup_steps = len(timesteps) - num_inference_steps * self.scheduler.order
-        self._num_timesteps = len(timesteps)
-
-        _, spatial_attn_outputs = self.unet_garm( # dk:forward
+        _, spatial_attn_outputs = self.unet_garm(
             garm_latents,
             0,
             encoder_hidden_states=prompt_embeds,
             return_dict=False,
         )
 
-        with self.progress_bar(total=num_inference_steps) as progress_bar:
-            for i, t in enumerate(timesteps):
-                latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
+        latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
 
-                # concat latents, image_latents in the channel dimension
-                scaled_latent_model_input = self.scheduler.scale_model_input(latent_model_input, t) #
-                latent_vton_model_input = torch.cat([scaled_latent_model_input, vton_latents], dim=1)
-                # latent_vton_model_input = scaled_latent_model_input + vton_latents
+        # concat latents, image_latents in the channel dimension
+        t = torch.randint(0, self.scheduler.num_train_timesteps, (batch_size * num_images_per_prompt,), device=device)
+        scaled_latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+        latent_vton_model_input = torch.cat([scaled_latent_model_input, vton_latents], dim=1)
 
-                spatial_attn_inputs = spatial_attn_outputs.copy()
-
-                # predict the noise residual
-                noise_pred = self.unet_vton(
-                    latent_vton_model_input,
-                    spatial_attn_inputs,
-                    t,
-                    encoder_hidden_states=prompt_embeds,
-                    return_dict=False,
-                )[0]
-
-                # Hack:
-                # For karras style schedulers the model does classifer free guidance using the
-                # predicted_original_sample instead of the noise_pred. So we need to compute the
-                # predicted_original_sample here if we are using a karras style scheduler.
-                if scheduler_is_in_sigma_space:
-                    step_index = (self.scheduler.timesteps == t).nonzero()[0].item()
-                    sigma = self.scheduler.sigmas[step_index]
-                    noise_pred = latent_model_input - sigma * noise_pred
-
-                # perform guidance
-                if self.do_classifier_free_guidance:
-                    noise_pred_text_image, noise_pred_text = noise_pred.chunk(2)
-                    noise_pred = (
-                        noise_pred_text
-                        + self.image_guidance_scale * (noise_pred_text_image - noise_pred_text)
-                    )
-
-                # Hack:
-                # For karras style schedulers the model does classifer free guidance using the
-                # predicted_original_sample instead of the noise_pred. But the scheduler.step function
-                # expects the noise_pred and computes the predicted_original_sample internally. So we
-                # need to overwrite the noise_pred here such that the value of the computed
-                # predicted_original_sample is correct.
-                if scheduler_is_in_sigma_space:
-                    noise_pred = (noise_pred - latents) / (-sigma)
-
-                # compute the previous noisy sample x_t -> x_t-1
-                latents = self.scheduler.step(noise_pred, t, latents, **extra_step_kwargs, return_dict=False)[0]
-
-                init_latents_proper = image_ori_latents * self.vae.config.scaling_factor
-
-                # repainting
-                if i < len(timesteps) - 1:
-                    noise_timestep = timesteps[i + 1]
-                    init_latents_proper = self.scheduler.add_noise(
-                        init_latents_proper, noise, torch.tensor([noise_timestep])
-                    )
-
-                latents = (1 - mask_latents) * init_latents_proper + mask_latents * latents
-
-                if callback_on_step_end is not None:
-                    callback_kwargs = {}
-                    for k in callback_on_step_end_tensor_inputs:
-                        callback_kwargs[k] = locals()[k]
-                    callback_outputs = callback_on_step_end(self, i, t, callback_kwargs)
-
-                    latents = callback_outputs.pop("latents", latents)
-                    prompt_embeds = callback_outputs.pop("prompt_embeds", prompt_embeds)
-                    negative_prompt_embeds = callback_outputs.pop("negative_prompt_embeds", negative_prompt_embeds)
-                    vton_latents = callback_outputs.pop("vton_latents", vton_latents)
-
-                # call the callback, if provided
-                if i == len(timesteps) - 1 or ((i + 1) > num_warmup_steps and (i + 1) % self.scheduler.order == 0):
-                    progress_bar.update()
-                    if callback is not None and i % callback_steps == 0:
-                        step_idx = i // getattr(self.scheduler, "order", 1)
-                        callback(step_idx, t, latents)
-
-        if not output_type == "latent":
-            image = self.vae.decode(latents / self.vae.config.scaling_factor, return_dict=False)[0]
-            image, has_nsfw_concept = self.run_safety_checker(image, device, prompt_embeds.dtype)
-        else:
-            image = latents
-            has_nsfw_concept = None
-
-        if has_nsfw_concept is None:
-            do_denormalize = [True] * image.shape[0]
-        else:
-            do_denormalize = [not has_nsfw for has_nsfw in has_nsfw_concept]
-
-        image = self.image_processor.postprocess(image, output_type=output_type, do_denormalize=do_denormalize)
-
-        # Offload all models
-        self.maybe_free_model_hooks()
-
-        if not return_dict:
-            return (image, has_nsfw_concept)
-
-        return StableDiffusionPipelineOutput(images=image, nsfw_content_detected=has_nsfw_concept)
+        # predict the noise residual
+        spatial_attn_inputs = spatial_attn_outputs.copy()
+        noise_pred = self.unet_vton(
+            latent_vton_model_input,
+            spatial_attn_inputs,
+            t,
+            encoder_hidden_states=prompt_embeds,
+            return_dict=False,
+        )[0]
+        # FIXME: noise_pred doesn't have grad_fn and requires_grad=False
+        # TODO: recover the images for images logging
+        noise_pred_shape = noise_pred.shape
+        noise_pred = noise_pred[0].view(batch_size, *noise_pred_shape[1:])
+        return noise_pred, noise
 
     def _encode_prompt(
         self,

@@ -81,6 +81,11 @@ if __name__ == '__main__':
         seed=seed,
     )
 
+    # FIXME: check if parameters in the model are leaf?
+    if all(p.is_leaf for p in model.pipe.unet_vton.parameters()):
+        # raise ValueError(f"Model parameters are all leaf.")
+        print(f"{__name__},loaded unet_vton parameters are all leaf.")
+
     image_idx = 0
     for image in images:
         image.save('./images_output/out_' + model_type + '_' + str(image_idx) + '.png')
