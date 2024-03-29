@@ -14,6 +14,7 @@
 # See the License for the specific language governing permissions and
 
 import argparse
+import copy
 import contextlib
 import gc
 import logging
@@ -22,6 +23,7 @@ import os
 import random
 import shutil
 from pathlib import Path
+from copy import deepcopy
 
 import accelerate
 import numpy as np
@@ -39,6 +41,7 @@ from PIL import Image
 from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, PretrainedConfig
+from cp_dataset import CPDataset
 
 import diffusers
 from diffusers import (
@@ -562,6 +565,11 @@ def parse_args(input_args=None):
             " more information see https://huggingface.co/docs/accelerate/v0.17.0/en/package_reference/accelerator#accelerate.Accelerator"
         ),
     )
+    parser.add_argument(
+        "--dataroot",
+        type=str,
+        default=None,
+    )
 
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -601,6 +609,63 @@ def parse_args(input_args=None):
         )
 
     return args
+
+
+def make_train_dataset_vton(args, tokenizer, accelerator):
+    # Get the datasets: you can either provide your own training and evaluation files (see below)
+    # or specify a Dataset from the hub (the dataset will be downloaded automatically from the datasets Hub).
+
+    # In distributed training, the load_dataset function guarantees that only one local process can concurrently
+    # download the dataset.
+    if args.dataroot is None:
+        assert "Please provide correct data root"
+    cp_dataset = CPDataset(args.dataroot, args.resolution, mode="train")
+    image_column = "vton_image_orig"
+    caption_column = "input_id"
+    conditioning_image_column = "garm_image_orig"
+    
+    def tokenize_captions(examples, is_train=True):
+        captions = []
+        for example in examples:
+            caption = example["input_id"]
+            if random.random() < args.proportion_empty_prompts:
+                captions.append("")
+            elif isinstance(caption, str):
+                captions.append(caption)
+            elif isinstance(caption, (list, np.ndarray)):
+                # take a random caption if there are multiple
+                captions.append(random.choice(caption) if is_train else caption[0])
+            else:
+                raise ValueError(
+                    f"Caption column `{caption_column}` should contain either strings or lists of strings."
+                )
+        inputs = tokenizer(
+            captions, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
+        )
+        return inputs.input_ids
+
+    def preprocess_train(examples):
+        
+        images = [example[image_column] for example in examples]
+        conditioning_images = [example[conditioning_image_column] for example in examples]
+        
+        examples["pixel_values"] = images
+        examples["conditioning_pixel_values"] = conditioning_images
+        examples["input_ids"] = tokenize_captions(examples)
+
+        return examples
+
+    with accelerator.main_process_first():
+        if args.max_train_samples is not None:
+            cp_dataset = cp_dataset.shuffle(seed=args.seed).select(range(args.max_train_samples))
+        # Set the training transforms
+        # Apply the preprocessing function to the dataset
+        new_cp_dataset = copy.deepcopy(cp_dataset)
+        train_dataset = preprocess_train(new_cp_dataset)
+
+    return train_dataset
+
+
 
 
 def make_train_dataset(args, tokenizer, accelerator):
@@ -916,7 +981,7 @@ def main(args):
         eps=args.adam_epsilon,
     )
 
-    train_dataset = make_train_dataset(args, tokenizer, accelerator)
+    train_dataset = make_train_dataset_vton(args, tokenizer, accelerator)
 
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,

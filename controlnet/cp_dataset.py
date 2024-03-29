@@ -79,6 +79,7 @@ class CPDataset(data.Dataset):
         self.data_list = data_list
         self.fine_height = image_size
         self.fine_width = int(image_size / 256 * 256)
+        self.image_size = image_size
         self.semantic_nc = semantic_nc
         self.data_path = osp.join(dataroot, mode)
         self.crop_size = (self.fine_height, self.fine_width)
@@ -186,6 +187,7 @@ class CPDataset(data.Dataset):
 
         c_name[key] = self.c_names[key][index]
         c[key] = Image.open(osp.join(self.data_path, "cloth", c_name[key])).convert("RGB")
+        garm_img = Image.open(osp.join(self.data_path, "cloth", c_name[key])).convert("RGB")
         # cloth_img = Image.open(osp.join(self.data_path, 'cloth', c_name[key])).convert('RGB')
         # cloth_img = transforms.Resize(self.crop_size, interpolation=2)(cloth_img)
         c[key] = transforms.Resize(self.crop_size, interpolation=2)(c[key])
@@ -343,20 +345,40 @@ class CPDataset(data.Dataset):
 
         c_img = np.array(c_img).astype(np.uint8)
         
-        tensor_to_image(inpaint_warp_cloth, "./sample/inpaint_image.png", self.datamode is "test")
-        tensor_to_image(1-inpaint_mask, "./sample/inpaint_mask.png", self.datamode is "test")
-        tensor_to_image(im, "./sample/GT.png", self.datamode is "test")
-        tensor_to_image(ref_image, "./sample/ref_image.png", self.datamode is "test")
+        tensor_to_image(inpaint_warp_cloth, "./sample/inpaint_image.png", self.datamode == "test")
+        tensor_to_image(1-inpaint_mask, "./sample/inpaint_mask.png", self.datamode == "test")
+        tensor_to_image(im, "./sample/GT.png", self.datamode == "test")
+        tensor_to_image(ref_image, "./sample/ref_image.png", self.datamode == "test")
+        
+        image_transforms = transforms.Compose(
+            [
+                transforms.Resize(self.image_size, interpolation=transforms.InterpolationMode.BILINEAR),
+                transforms.CenterCrop(self.image_size),
+                transforms.ToTensor(),
+                transforms.Normalize([0.5], [0.5]),
+            ]
+        )
+
+        conditioning_image_transforms = transforms.Compose(
+            [
+                transforms.Resize(self.image_size, interpolation=transforms.InterpolationMode.BILINEAR),
+                transforms.CenterCrop(self.image_size),
+                transforms.ToTensor(),
+            ]
+        )
+        
         result = {
-            "GT": im,
-            "inpaint_image": inpaint_warp_cloth,
-            "inpaint_pa": ref_image_pa,
-            "inpaint_mask": inpaint_mask,
-            "ref_imgs": ref_image,
-            "warp_feat": feat,
+            # "GT": im,
+            # "inpaint_image": inpaint_warp_cloth,
+            # "inpaint_pa": ref_image_pa,
+            # "inpaint_mask": inpaint_mask,
+            # "ref_imgs": ref_image,
+            # "warp_feat": feat,
             "file_name": self.im_names[index],
-            "cloth_array": np.array(c_img).astype(np.uint8),
-            "input_id": caption_string
+            # "cloth_array": np.array(c_img).astype(np.uint8),
+            "input_id": caption_string,
+            "vton_image_orig": image_transforms(im_pil_big),
+            "garm_image_orig": conditioning_image_transforms(garm_img),
         }
         return result
 
