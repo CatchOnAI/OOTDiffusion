@@ -288,16 +288,16 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
         )
 
         # 3. Preprocess image
-        image_garm = preprocess(image_garm)
-        image_vton = preprocess(image_vton)
-        image_ori = preprocess(image_ori)
+        image_garm = self.image_processor.preprocess(image_garm)
+        image_vton = self.image_processor.preprocess(image_vton)
+        image_ori = self.image_processor.preprocess(image_ori)
+        mask = self.image_processor.preprocess(mask)
         # mask = np.array(mask)
         # mask[mask < 127] = 0
         # mask[mask >= 127] = 255
         # mask = torch.tensor(mask)
         # mask = mask / 255
         # mask = mask.reshape(-1, 1, mask.size(-2), mask.size(-1))
-        mask = preprocess(mask)
 
         # 4. set timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)
@@ -364,7 +364,7 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
                 latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
 
                 # concat latents, image_latents in the channel dimension
-                scaled_latent_model_input = self.scheduler.scale_model_input(latent_model_input, t) #
+                scaled_latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
                 latent_vton_model_input = torch.cat([scaled_latent_model_input, vton_latents], dim=1)
                 # latent_vton_model_input = scaled_latent_model_input + vton_latents
 
@@ -752,7 +752,6 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
 
         image = image.to(device=device, dtype=dtype)
         image_ori = image_ori.to(device=device, dtype=dtype)
-        import ipdb; ipdb.set_trace()
         
         batch_size = batch_size * num_images_per_prompt
 
@@ -774,11 +773,11 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
             else:
                 image_latents = self.vae.encode(image).latent_dist.mode()
                 image_ori_latents = self.vae.encode(image_ori).latent_dist.mode()
-
-        mask = torch.nn.functional.interpolate(
-            mask, size=(image_latents.size(-2), image_latents.size(-1))
-        )
-        mask = mask.to(device=device, dtype=dtype)
+        
+        # mask = torch.nn.functional.interpolate(
+        #     mask, size=(image_latents.size(-2), image_latents.size(-1))
+        # )
+        # mask = mask.to(device=device, dtype=dtype)
 
         if batch_size > image_latents.shape[0] and batch_size % image_latents.shape[0] == 0:
             additional_image_per_prompt = batch_size // image_latents.shape[0]
