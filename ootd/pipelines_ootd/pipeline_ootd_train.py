@@ -280,15 +280,16 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
             num_images_per_prompt,
             self.do_classifier_free_guidance,
             negative_prompt,
-            prompt_embeds=None,
-            negative_prompt_embeds=None,
+            prompt_embeds=prompt_embeds,
+            negative_prompt_embeds=negative_prompt_embeds,
         )
 
         # 3. Preprocess image
-        image_garm = preprocess(image_garm)
-        image_vton = preprocess(image_vton)
-        image_ori = preprocess(image_ori)
-        mask = preprocess(mask)
+        # FIXME: the input images for image processors look unexpected
+        image_garm = self.image_processor.preprocess(image_garm)
+        image_vton = self.image_processor.preprocess(image_vton)
+        image_ori = self.image_processor.preprocess(image_ori)
+        mask = self.image_processor.preprocess(mask)
         
         # 5. Prepare Image latents
         garm_latents = self.prepare_garm_latents(
@@ -318,19 +319,20 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
         width = width * self.vae_scale_factor
 
         # 6. Prepare latent variables
-        num_channels_latents = self.vae.config.latent_channels
-        latents = self.prepare_latents(
-            batch_size * num_images_per_prompt,
-            num_channels_latents,
-            height,
-            width,
-            prompt_embeds.dtype,
-            device,
-            generator,
-            latents,
-        )
-        # FIXME: the noise isn't used correctly
-        noise = latents.clone()
+        # num_channels_latents = self.vae.config.latent_channels
+        # FIXME: this is wrong! the prepared latent will be purely noise, which should be used
+        # in inference rather than training.
+        # latents = self.prepare_latents(
+        #     batch_size * num_images_per_prompt,
+        #     num_channels_latents,
+        #     height,
+        #     width,
+        #     prompt_embeds.dtype,
+        #     device,
+        #     generator,
+        #     latents,
+        # )
+        # noise = latents.clone()
 
         t = torch.randint(0, self.scheduler.config.num_train_timesteps, (batch_size * num_images_per_prompt,), device=device)
 
@@ -343,12 +345,14 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
             return_dict=False,
         )
 
-        latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
-
         # concat latents, image_latents in the channel dimension
-        
-        scaled_latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
-        latent_vton_model_input = torch.cat([scaled_latent_model_input, vton_latents], dim=1)
+        noise = torch.randn_like(image_ori_latents)
+        t = torch.randint(0, self.scheduler.num_train_timesteps, (batch_size, ), device=device)
+        noisy_latents = self.scheduler.add_noise(image_ori_latents, noise, t)
+        # TODO: the following concatenation is necessary for classifier free guidance. 
+        # But why is it?
+        latent_model_input = torch.cat([noisy_latents] * 2) if self.do_classifier_free_guidance else noisy_latents
+        latent_vton_model_input = torch.cat([latent_model_input, vton_latents], dim=1)
 
         # predict the noise residual
         spatial_attn_inputs = spatial_attn_outputs.copy()
@@ -360,10 +364,6 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
             return_dict=False,
         )[0]
         
-        # FIXME: noise_pred doesn't have grad_fn and requires_grad=False
-        # TODO: recover the images for images logging
-        noise_pred_shape = noise_pred.shape
-        noise_pred = noise_pred[0].view(batch_size, *noise_pred_shape[1:])
         return noise_pred, noise
 
     def _encode_prompt(
@@ -702,8 +702,9 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
             image_ori_latents = torch.cat([image_ori_latents], dim=0)
 
         if do_classifier_free_guidance:
-            # uncond_image_latents = torch.zeros_like(image_latents)
-            image_latents = torch.cat([image_latents] * 2, dim=0)
+            uncond_image_latents = torch.zeros_like(image_latents)
+            image_latents = torch.cat([image_latents, uncond_image_latents], dim=0)
+            # image_latents = torch.cat([image_latents] * 2, dim=0)
 
         return image_latents, mask, image_ori_latents
 

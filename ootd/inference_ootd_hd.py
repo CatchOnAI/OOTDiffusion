@@ -40,11 +40,6 @@ class OOTDiffusionHD:
             torch_dtype=torch.float16,
         )
         
-        # FIXME: check if parameters in the model are leaf?
-        if all(p.is_leaf for p in vae.parameters()):
-            # raise ValueError(f"Model parameters are all leaf.")
-            print(f"{__name__},loaded VAE parameters are all leaf.")
-        
         unet_garm = UNetGarm2DConditionModel.from_pretrained(
             UNET_PATH,
             subfolder="unet_garm",
@@ -63,11 +58,6 @@ class OOTDiffusionHD:
             torch_dtype=torch.float16,
             use_safetensors=True,
         )
-
-        # FIXME: check if parameters in the model are leaf?
-        if all(p.is_leaf for p in vae.parameters()):
-            # raise ValueError(f"Model parameters are all leaf.")
-            print(f"{__name__},loaded unet_vton parameters are all leaf.")
 
         self.pipe = OotdPipeline.from_pretrained(
             MODEL_PATH,
