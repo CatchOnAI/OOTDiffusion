@@ -61,7 +61,7 @@ from diffusers.utils import (
     scale_lora_layers,
     unscale_lora_layers,
 )
-from data_scripts.cp_dataset import CPDataset
+from data_scripts.cp_dataset import CPDatasetV2 as CPDataset
 import wandb
 
 from ootd.train_ootd_hd import OOTDiffusionHD
@@ -98,9 +98,8 @@ def log_validation(model, args, accelerator, weight_dtype, test_dataloder):
         revision=args.revision,
         variant=args.variant,
         torch_dtype=weight_dtype,
-    )
+    ).to(accelerator.device)
     pipeline.scheduler = UniPCMultistepScheduler.from_config(pipeline.scheduler.config)
-    pipeline = pipeline.to(accelerator.device)
     pipeline.set_progress_bar_config(disable=True)
 
     if args.enable_xformers_memory_efficient_attention:
@@ -119,18 +118,34 @@ def log_validation(model, args, accelerator, weight_dtype, test_dataloder):
                 image_garm = batch["ref_imgs"]
                 image_vton = batch["inpaint_image"]
                 image_ori= batch["GT"]
-                mask = batch["inpaint_mask"]
+                inpaint_mask = batch["inpaint_mask"]
+                mask = batch["mask"]
 
+                # what is this doing?
+                prompt_image = model.auto_processor(images=image_garm, return_tensors="pt").to(args.gpu_id)
+                prompt_image = model.image_encoder(prompt_image.data['pixel_values']).image_embeds
+                prompt_image = prompt_image.unsqueeze(1)
+                prompt_embeds = model.text_encoder(model.tokenize_captions([""], 2).to(model.gpu_id))[0]
+                prompt_embeds[:, 1:] = prompt_image[:]
+                
                 samples = pipeline(
-                    prompt,
-                    image_garm,
-                    image_vton,
-                    mask,
-                    image_ori,
+                    prompt_embeds=prompt_embeds,
+                    image_garm=image_garm,
+                    image_vton=image_vton, 
+                    mask=mask,
+                    image_ori=image_ori,
                     num_inference_steps=args.inference_steps,
                     generator=generator,
                 ).images[0]
-            image_logs.append({"garment": image_garm, "model": image_vton, "orig_img": image_ori, "samples": samples, "prompt": prompt})
+
+                image_logs.append({
+                    "garment": image_garm, 
+                    "model": image_vton, 
+                    "orig_img": image_ori, 
+                    "samples": samples, 
+                    "prompt": prompt,
+                    "mask": mask
+                    })
 
     for tracker in accelerator.trackers:
         if tracker.name == "wandb":
@@ -139,6 +154,7 @@ def log_validation(model, args, accelerator, weight_dtype, test_dataloder):
                 formatted_images.append(wandb.Image(log["garment"], caption="garment images"))
                 formatted_images.append(wandb.Image(log["model"], caption="masked model images"))
                 formatted_images.append(wandb.Image(log["orig_img"], caption="original images"))
+                formatted_images.append(wandb.Image(log["mask"], caption="inpaint mask"))
                 formatted_images.append(wandb.Image(log["samples"], caption=log["prompt"]))
             tracker.log({"validation": formatted_images})
         else:
@@ -531,6 +547,36 @@ def parse_args(input_args=None):
         action="store_true", help="Whether log the gradients of trained parts."
     )
 
+    parser.add_argument(
+        "--vit_path",
+        type=str,
+        default="openai/clip-vit-large-patch14",
+    )
+
+    parser.add_argument(
+        "--vae_path",
+        type=str,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--unet_path",
+        type=str,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--notes",
+        type=str,
+        default="",
+    )
+
+    parser.add_argument(
+        "--tracker_entity",
+        type=str,
+        default="catchonlabs",
+    )
+
     if input_args is not None:
         args = parser.parse_args(input_args)
     else:
@@ -724,6 +770,7 @@ def collate_fn(examples):
     }
 
 def main(args):
+    args.notes = "add prompt preprocessor for prompt embeds."
     if args.report_to == "wandb" and args.hub_token is not None:
         raise ValueError(
             "You cannot use both --report_to=wandb and --hub_token due to a security risk of exposing your token."
@@ -785,9 +832,8 @@ def main(args):
         # TODO: it is better to move all these paths to args or a config file.
         model = OOTDiffusionHD(
             args.gpu_id, 
-            vit_path="openai/clip-vit-large-patch14",
-            vae_path="/home/stevexu/VSprojects/OOTDiffusion/checkpoints/ootd", 
-            model_path="/home/stevexu/VSprojects/OOTDiffusion/checkpoints/train_ootd",
+            model_path=args.pretrained_model_name_or_path,
+            vit_path=args.vit_path
             )
     else:
         raise NotImplementedError(f"Model type {args.model_type} not implemented")
@@ -891,7 +937,7 @@ def main(args):
         assert "Please provide correct data root"
     # train_dataset = make_train_dataset(args, tokenizer, accelerator)
     train_dataset = CPDataset(args.dataroot, args.resolution, mode="train", data_list=args.train_data_list)
-    test_dataset = CPDataset(args.dataroot, args.resolution, mode="test", data_list=args.test_data_list)
+    test_dataset = CPDataset(args.dataroot, args.resolution, mode="train", data_list=args.test_data_list)
     
     # TODO: Rewrite the collate_fn
     def collate_fn_cp(examples):
@@ -1005,7 +1051,7 @@ def main(args):
     # The trackers initializes automatically on the main process.
     if accelerator.is_main_process:
         tracker_config = dict(vars(args))
-        accelerator.init_trackers(args.tracker_project_name, config=tracker_config)
+        accelerator.init_trackers(args.tracker_project_name, config=tracker_config, init_kwargs={"wandb": {"entity": args.tracker_entity}})
 
     # Train!
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
@@ -1060,6 +1106,11 @@ def main(args):
     unet_garm_grad_dict = defaultdict(list)
     unet_vton_grad_dict = defaultdict(list)
     vae_grad_dict = defaultdict(list)
+
+    # pre-train validation
+    log_validation(model, args,accelerator, weight_dtype, test_dataloader)
+    
+    # training starts!
     for epoch in range(first_epoch, args.num_train_epochs):
         for step, batch in enumerate(train_dataloader):
             with accelerator.autocast():
@@ -1067,15 +1118,23 @@ def main(args):
                 image_garm = batch["ref_imgs"]
                 image_vton = batch["inpaint_image"]
                 image_ori = batch["GT"]
+                inpaint_mask = batch["inpaint_mask"]
                 mask = batch["inpaint_mask"]
                 prompt = batch["prompt"]
+
+                # what is this doing?
+                prompt_image = model.auto_processor(images=image_garm, return_tensors="pt").to(args.gpu_id)
+                prompt_image = model.image_encoder(prompt_image.data['pixel_values']).image_embeds
+                prompt_image = prompt_image.unsqueeze(1)
+                prompt_embeds = model.text_encoder(model.tokenize_captions([""], 2).to(model.gpu_id))[0]
+                prompt_embeds[:, 1:] = prompt_image[:]
                 
                 noise_pred, noise = model(
                     image_garm = image_garm,
                     image_vton = image_vton,
                     image_ori = image_ori,
-                    mask = mask,
-                    prompt = prompt,                
+                    mask = mask, 
+                    prompt_embeds = prompt_embeds,            
                     args = args
                 )
                 
@@ -1088,20 +1147,20 @@ def main(args):
                 
                 accelerator.backward(loss)
                 # TODO: Do we need to clip gradients?
-                # if accelerator.sync_gradients:
-                #     unet_garm_grad_norm = accelerator.clip_grad_norm_(model.unet_garm.parameters(), args.max_grad_norm)
-                    # unet_vton_grad_norm = accelerator.clip_grad_norm_(model.unet_vton.parameters(), args.max_grad_norm)
-                    # unet_vae_grad_norm = accelerator.clip_grad_norm_(model.vae.parameters(), args.max_grad_norm)  
+                if accelerator.sync_gradients:
+                    accelerator.clip_grad_norm_(model.unet_garm.parameters(), args.max_grad_norm)
+                    # accelerator.clip_grad_norm_(model.unet_vton.parameters(), args.max_grad_norm)
+                    # accelerator.clip_grad_norm_(model.vae.parameters(), args.max_grad_norm)  
                     
-                # TODO: log the collected gradients
                 if args.log_grads:
                     if model.unet_garm.training:
                         for name, block in model.unet_garm.named_children():
                             grad = torch.tensor(0.0).to(accelerator.device)
                             for p in block.parameters():
                                 if p.grad is not None:
-                                    grad += p.norm()
-                            unet_garm_grad_dict[name+'.grad'] = grad.detach().item()
+                                    grad += p.grad.norm()
+                                    # grad += p.grad.abs().max()
+                            unet_garm_grad_dict[name+'.grad.norm'] = grad.detach().item()
                         accelerator.log(unet_garm_grad_dict, step=global_step)
                     
                     if model.unet_vton.training:
@@ -1109,7 +1168,7 @@ def main(args):
                             grad = torch.tensor(0.0).to(accelerator.device)
                             for p in block.parameters():
                                 if p.grad is not None:
-                                    grad += p.norm()
+                                    grad += p.grad.norm()
                             unet_vton_grad_dict[name+'.grad'] = grad.detach().item()
                         accelerator.log(unet_vton_grad_dict, step=global_step)
                     
@@ -1118,7 +1177,7 @@ def main(args):
                             grad = torch.tensor(0.0).to(accelerator.device)
                             for p in block.parameters():
                                 if p.grad is not None:
-                                    grad += p.norm()
+                                    grad += p.grad.norm()
                             vae_grad_dict[name+'.grad'] = grad.detach().item()
                         accelerator.log(vae_grad_dict, step=global_step)
 
@@ -1159,8 +1218,7 @@ def main(args):
                         logger.info(f"Saved state to {save_path}")
 
                     if global_step % args.validation_steps == 0:
-                        # TODO: Rewrite the log
-                        image_logs = log_validation(
+                        log_validation(
                             model,
                             args,
                             accelerator,
@@ -1177,23 +1235,23 @@ def main(args):
 
     # Create the pipeline using the trained modules and save it.
     # accelerator.wait_for_everyone()
-    if accelerator.is_main_process:
-        controlnet = accelerate.unwrap_model(controlnet)
-        controlnet.save_pretrained(args.output_dir)
+    # if accelerator.is_main_process:
+    #     controlnet = accelerate.unwrap_model(controlnet)
+    #     controlnet.save_pretrained(args.output_dir)
 
-        if args.push_to_hub:
-            save_model_card(
-                repo_id,
-                image_logs=image_logs,
-                base_model=args.pretrained_model_name_or_path,
-                repo_folder=args.output_dir,
-            )
-            upload_folder(
-                repo_id=repo_id,
-                folder_path=args.output_dir,
-                commit_message="End of training",
-                ignore_patterns=["step_*", "epoch_*"],
-            )
+    #     if args.push_to_hub:
+    #         save_model_card(
+    #             repo_id,
+    #             image_logs=image_logs,
+    #             base_model=args.pretrained_model_name_or_path,
+    #             repo_folder=args.output_dir,
+    #         )
+    #         upload_folder(
+    #             repo_id=repo_id,
+    #             folder_path=args.output_dir,
+    #             commit_message="End of training",
+    #             ignore_patterns=["step_*", "epoch_*"],
+    #         )
 
     accelerator.end_training()
 

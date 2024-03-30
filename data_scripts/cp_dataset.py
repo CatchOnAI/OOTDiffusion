@@ -83,8 +83,9 @@ class CPDataset(data.Dataset):
         self.data_path = osp.join(dataroot, mode)
         self.crop_size = (self.fine_height, self.fine_width)
         self.toTensor = transforms.ToTensor()
-        self.transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-        self.clip_normalize = transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
+        # self.transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+        self.transform = transforms.Compose([transforms.ToTensor()])
+        # self.clip_normalize = transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
 
         # load data list
         im_names = []
@@ -191,8 +192,6 @@ class CPDataset(data.Dataset):
 
         c_name[key] = self.c_names[key][index]
         c[key] = Image.open(osp.join(self.data_path, "cloth", c_name[key])).convert("RGB")
-        # cloth_img = Image.open(osp.join(self.data_path, 'cloth', c_name[key])).convert('RGB')
-        # cloth_img = transforms.Resize(self.crop_size, interpolation=2)(cloth_img)
         c[key] = transforms.Resize(self.crop_size, interpolation=2)(c[key])
         c_img = c[key]
         ref_image_pa = self.transform(c_img)
@@ -205,7 +204,6 @@ class CPDataset(data.Dataset):
         cm_array = (cm_array >= 128).astype(np.float32)
         cm[key] = torch.from_numpy(cm_array)  # [0,1]
         cm[key].unsqueeze_(0)
-        # c[key] = c[key] * cm[key]
 
         # person image
         im_pil_big = Image.open(osp.join(self.data_path, im_name))
@@ -257,7 +255,9 @@ class CPDataset(data.Dataset):
         mask = cv2.dilate(mask.astype(np.uint8), kernel=np.ones((kernel_size, kernel_size)), iterations=3)
         mask = cv2.erode(mask.astype(np.uint8), kernel=np.ones((kernel_size, kernel_size)), iterations=1)
         mask = mask.astype(np.float32)
+        # TODO: to work with OOTDpipeline, which mask do we need?
         inpaint_mask = 1 - self.toTensor(mask)
+        # inpaint_mask = self.toTensor(mask)
 
         warped_cloth_name = im_name.replace("image", "cloth-warp" if not self.unpaired else "unpaired-cloth-warp")
 
@@ -274,13 +274,12 @@ class CPDataset(data.Dataset):
         feat = warped_cloth * (1 - inpaint_mask) + im * inpaint_mask
         feat_with_pose = im * inpaint_mask
         
-
         # down, up, left, right = mask2bbox(cm[key][0].numpy())
         # ref_image = c[key][:, down:up, left:right]
         ref_image = c[key]
-        ref_image = (ref_image + 1.0) / 2.0
+        # ref_image = (ref_image + 1.0) / 2.0
         # ref_image = transforms.Resize((224, 224))(ref_image)
-        ref_image = self.clip_normalize(ref_image)
+        # ref_image = self.clip_normalize(ref_image)
 
         # load pose points
         pose_name = im_name.replace("image", "openpose_json").replace(".jpg", "_keypoints.json")
@@ -294,7 +293,6 @@ class CPDataset(data.Dataset):
         agnostic = self.transform(agnostic)
 
         tensor_to_image(agnostic, "./internal/agnostic.jpg")
-        
 
         # load pose image
         pose_im_name = im_name.replace("image", "openpose_img").replace(".jpg", "_rendered.png")
@@ -341,23 +339,176 @@ class CPDataset(data.Dataset):
         # get the caption of the cloth
         caption = self.caption_dict[c_name[key]]
 
+        # get masked vton image by ootd
         c_img = np.array(c_img).astype(np.uint8)
         result = {
             "GT": im,
-            "inpaint_image": inpaint_warp_cloth,
+            # "inpaint_image": inpaint_warp_cloth,
+            # "inpaint_image": im * inpaint_mask,
+            "inpaint_image": agnostic,
             "inpaint_pa": ref_image_pa,
             "inpaint_mask": inpaint_mask,
+            "mask": mask,
             "ref_imgs": ref_image,
             "warp_feat": feat,
             "file_name": self.im_names[index],
             "cloth_array": np.array(c_img).astype(np.uint8),
             "input_ids": "",
-            "prompt": caption,
+            # "prompt": caption,
+            "prompt": "upperbody",
         }
         return result
 
     def __len__(self):
         return len(self.im_names)
+
+
+class CPDatasetV2(CPDataset):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # self.fine_height = 384
+        # self.fine_width = 512
+        # self.crop_size = (self.fine_height, self.fine_width)
+        self.transform = transforms.Compose([transforms.ToTensor()])
+
+    def name(self):
+        return "CPDatasetV2"
+    
+    def __getitem__(self, index):
+        im_name = self.im_names[index]
+        im_name = "image/" + im_name
+        c_name = {}
+        c = {}
+        cm = {}
+        if self.unpaired:
+            key = "unpaired"
+        else:
+            key = "paired"
+
+        c_name[key] = self.c_names[key][index]
+        c[key] = Image.open(osp.join(self.data_path, "cloth", c_name[key])).convert("RGB")
+        c[key] = transforms.Resize(self.crop_size, interpolation=2)(c[key])
+        c_img = c[key]
+        cm[key] = Image.open(osp.join(self.data_path, "cloth-mask", c_name[key]))
+        cm[key] = transforms.Resize(self.crop_size, interpolation=0)(cm[key])
+        cm_img = cm[key]
+
+        cm_array = np.array(cm[key])
+        cm_array = (cm_array >= 128).astype(np.float32)
+        cm[key] = torch.from_numpy(cm_array)  # [0,1]
+        cm[key].unsqueeze_(0)
+
+        # person image
+        im_pil_big = Image.open(osp.join(self.data_path, im_name))
+        im_pil = transforms.Resize(self.crop_size, interpolation=2)(im_pil_big)
+        im = self.transform(im_pil)
+
+        # load parsing image
+        parse_name = im_name.replace("image", "image-parse-v3").replace(".jpg", ".png")
+        im_parse_pil_big = Image.open(osp.join(self.data_path, parse_name))
+        im_parse_pil = transforms.Resize(self.crop_size, interpolation=0)(im_parse_pil_big)
+        parse = torch.from_numpy(np.array(im_parse_pil)[None]).long()
+
+        # parse map
+        labels = {
+            0: ["background", [0, 10]],
+            1: ["hair", [1, 2]],
+            2: ["face", [4, 13]],
+            3: ["upper", [5, 6, 7]],
+            4: ["bottom", [9, 12]],
+            5: ["left_arm", [14]],
+            6: ["right_arm", [15]],
+            7: ["left_leg", [16]],
+            8: ["right_leg", [17]],
+            9: ["left_shoe", [18]],
+            10: ["right_shoe", [19]],
+            11: ["socks", [8]],
+            12: ["noise", [3, 11]],
+        }
+
+        parse_map = torch.FloatTensor(20, self.fine_height, self.fine_width).zero_()
+        parse_map = parse_map.scatter_(0, parse, 1.0)
+        new_parse_map = torch.FloatTensor(self.semantic_nc, self.fine_height, self.fine_width).zero_()
+
+        for i in range(len(labels)):
+            for label in labels[i][1]:
+                new_parse_map[i] += parse_map[label]
+
+        parse_onehot = torch.FloatTensor(1, self.fine_height, self.fine_width).zero_()
+        for i in range(len(labels)):
+            for label in labels[i][1]:
+                parse_onehot[0] += parse_map[label] * i
+
+        mask_id = torch.Tensor([3, 5, 6])
+        mask = torch.isin(parse_onehot[0], mask_id).numpy()
+
+        kernel_size = int(5 * (self.fine_width / 256))
+        mask = cv2.dilate(mask.astype(np.uint8), kernel=np.ones((kernel_size, kernel_size)), iterations=3)
+        mask = cv2.erode(mask.astype(np.uint8), kernel=np.ones((kernel_size, kernel_size)), iterations=1)
+        mask = mask.astype(np.float32)
+        inpaint_mask = 1 - self.toTensor(mask)
+
+        ref_image = c[key]
+        ref_image = self.transform(ref_image)
+
+        # load pose points
+        pose_name = im_name.replace("image", "openpose_json").replace(".jpg", "_keypoints.json")
+        with open(osp.join(self.data_path, pose_name), "r") as f:
+            pose_label = json.load(f)
+            pose_data = pose_label["people"][0]["pose_keypoints_2d"]
+            pose_data = np.array(pose_data)
+            pose_data = pose_data.reshape((-1, 3))[:, :2]
+        agnostic = self.get_agnostic(im_pil_big, im_parse_pil_big, pose_data)
+        agnostic = transforms.Resize(self.crop_size, interpolation=2)(agnostic)
+        agnostic = self.transform(agnostic)
+
+        # load pose image
+        pose_im_name = im_name.replace("image", "openpose_img").replace(".jpg", "_rendered.png")
+        pose_im = Image.open(osp.join(self.data_path, pose_im_name))
+        pose_im = transforms.Resize(self.crop_size, interpolation=0)(pose_im)
+        # Convert black background to transparency
+        datas = pose_im.getdata()
+        newData = []
+        for item in datas:
+            # Change all pixels that are completely black to be transparent
+            if item[0] == 0 and item[1] == 0 and item[2] == 0:
+                newData.append((128, 128, 128))
+            else:
+                newData.append(item)
+
+        # load image-parse-agnostic
+        parse_name = im_name.replace("image", "image-parse-agnostic-v3.2").replace(".jpg", ".png")
+        image_parse_agnostic = Image.open(osp.join(self.data_path, parse_name))
+        image_parse_agnostic = transforms.Resize(self.crop_size, interpolation=0)(image_parse_agnostic)
+        parse_agnostic = torch.from_numpy(np.array(image_parse_agnostic)[None]).long()
+        parse_agnostic_map = torch.FloatTensor(20, self.fine_height, self.fine_width).zero_()
+        parse_agnostic_map = parse_agnostic_map.scatter_(0, parse_agnostic, 1.0)
+        new_parse_agnostic_map = torch.FloatTensor(self.semantic_nc, self.fine_height, self.fine_width).zero_()
+        for i in range(len(labels)):
+            for label in labels[i][1]:
+                new_parse_agnostic_map[i] += parse_agnostic_map[label]
+        hands_mask = torch.sum(new_parse_agnostic_map[5:7], dim=0, keepdim=True)
+        hands_mask = torch.clamp(hands_mask, min=0.0, max=1.0)
+        
+        # get the caption of the cloth
+        caption = self.caption_dict[c_name[key]]
+
+        # get masked vton image by ootd
+        c_img = np.array(c_img).astype(np.uint8)
+        result = {
+            "GT": im,
+            # "inpaint_image": inpaint_warp_cloth,
+            # "inpaint_image": im * inpaint_mask,
+            "inpaint_image": agnostic,
+            "inpaint_mask": inpaint_mask,
+            "mask": mask,
+            "ref_imgs": ref_image,
+            "file_name": self.im_names[index],
+            # "prompt": caption,
+            "prompt": "upperbody",
+        }
+        return result
 
 
 def pre_alignment(c, cm, parse_roi):

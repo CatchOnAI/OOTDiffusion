@@ -16,7 +16,7 @@ import pdb
 from ootd.pipelines_ootd.pipeline_ootd_train import OotdPipeline
 from pipelines_ootd.unet_garm_2d_condition import UNetGarm2DConditionModel
 from pipelines_ootd.unet_vton_2d_condition import UNetVton2DConditionModel
-from diffusers import UniPCMultistepScheduler
+from diffusers import DDPMScheduler
 from diffusers import AutoencoderKL
 from diffusers.utils import (
     PIL_INTERPOLATION,
@@ -36,23 +36,24 @@ from safetensors.torch import load_file
 
 class OOTDiffusionHD:
 
-    def __init__(self, gpu_id, **kwargs):
+    def __init__(self, gpu_id, model_path, **kwargs):
         self.gpu_id = 'cuda:' + str(gpu_id)
 
-        VAE_PATH = kwargs["vae_path"]
-        MODEL_PATH = kwargs["model_path"]
-        VIT_PATH = kwargs["vit_path"]
+        MODEL_PATH = model_path
+        VIT_PATH = kwargs["vit_path"] if "vit_path" in kwargs else MODEL_PATH
+        VAE_PATH = kwargs["vae_path"] if "vae_path" in kwargs else MODEL_PATH
 
         self.vae = AutoencoderKL.from_pretrained(
             VAE_PATH,
             subfolder="vae",
-            # torch_dtype=torch.float16,
+            torch_dtype=torch.float16,
         )
     
         # unet_sd = load_file(f"{MODEL_PATH}/diffusion_pytorch_model.safetensors")
         self.unet_garm = UNetGarm2DConditionModel.from_pretrained(
             MODEL_PATH,
-            subfolder="ootd_hd/unet_garm",
+            # subfolder="ootd_hd/unet_garm",
+            subfolder="ootd_hd/checkpoint-36000/unet_garm",
             # torch_dtype=torch.float16,
             use_safetensors=True,
             local_files_only=True,
@@ -62,8 +63,9 @@ class OOTDiffusionHD:
 
         self.unet_vton = UNetVton2DConditionModel.from_pretrained(
             MODEL_PATH,
-            subfolder="ootd_hd/unet_vton",
-            # torch_dtype=torch.float16,
+            # subfolder="ootd_hd/unet_vton",
+            subfolder="ootd_hd/checkpoint-36000/unet_vton",
+            torch_dtype=torch.float16,
             use_safetensors=True,
             local_files_only=True,
             low_cpu_mem_usage=False,
@@ -74,31 +76,33 @@ class OOTDiffusionHD:
         self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(VIT_PATH).to(self.gpu_id)
 
         self.tokenizer = CLIPTokenizer.from_pretrained(
-            VAE_PATH,
+            MODEL_PATH,
             subfolder="tokenizer",
         )
+
         self.text_encoder = CLIPTextModel.from_pretrained(
-            VAE_PATH,
+            MODEL_PATH,
             subfolder="text_encoder",
         ).to(self.gpu_id)
 
+        self.scheduler = DDPMScheduler.from_pretrained(
+            MODEL_PATH, 
+            subfolder="scheduler"
+            )
+        
         self.pipe = OotdPipeline.from_pretrained(
-            VAE_PATH,
+            MODEL_PATH,
             vae=self.vae,
             text_encoder=self.text_encoder,
             tokenizer=self.tokenizer,
             unet_garm=self.unet_garm,
             unet_vton=self.unet_vton,
-            torch_dtype=torch.float16,
-            variant="fp16",
+            scheduler=self.scheduler,
             use_safetensors=True,
             safety_checker=None,
             requires_safety_checker=False,
         ).to(self.gpu_id)
-
-        self.pipe.scheduler = UniPCMultistepScheduler.from_config(self.pipe.scheduler.config)
-
-
+        
     def tokenize_captions(self, captions, max_length):
         inputs = self.tokenizer(
             captions, max_length=max_length, padding="max_length", truncation=True, return_tensors="pt"
@@ -113,8 +117,9 @@ class OOTDiffusionHD:
                 image_vton=None,
                 image_ori=None,
                 mask=None,
-                prompt='',
-                negative_prompt='',
+                prompt=None,
+                prompt_embeds = None,
+                negative_prompt = None,
                 **kwargs
     ):  
         noise_pred, noise = self.pipe(
@@ -123,5 +128,6 @@ class OOTDiffusionHD:
             image_vton=image_vton,
             mask=mask,
             image_ori=image_ori, 
+            prompt_embeds=prompt_embeds,
         )
         return noise_pred, noise
