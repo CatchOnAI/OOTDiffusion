@@ -1,6 +1,6 @@
 CUDA_VISIBLE_DEVICES=1 python /home/dwang/miniconda3/envs/ootd/bin/accelerate launch \
     --config_file accelerate_config.json train_ootd.py \
-    --pretrained_model_name_or_path="runwayml/stable-diffusion-v1-5" \
+    --pretrained_model_name_or_path="checkpoints/ootd/" \
     --mixed_precision="fp16" \
     --output_dir="output/logs/train_ootd" \
     --dataset_name="SaffalPoosh/VITON-HD-test" \

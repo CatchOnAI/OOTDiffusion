@@ -338,7 +338,7 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
 
         if False:
             print(UNetGarm2DConditionModel==UNetGarm2DConditionModel)
-        _, spatial_attn_outputs = self.unet_garm(
+        _, spatial_attn_outputs = self.unet_garm.forward(
             garm_latents,
             timestep = t,
             encoder_hidden_states=prompt_embeds,
@@ -356,7 +356,7 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
 
         # predict the noise residual
         spatial_attn_inputs = spatial_attn_outputs.copy()
-        noise_pred = self.unet_vton(
+        noise_pred = self.unet_vton.forward(
             latent_vton_model_input,
             spatial_attn_inputs,
             t,

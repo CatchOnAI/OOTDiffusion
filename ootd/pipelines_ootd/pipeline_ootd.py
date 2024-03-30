@@ -313,7 +313,7 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
             self.do_classifier_free_guidance,
             generator,
         )
-
+        
         vton_latents, mask_latents, image_ori_latents = self.prepare_vton_latents(
             image_vton,
             mask,
@@ -752,7 +752,8 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
 
         image = image.to(device=device, dtype=dtype)
         image_ori = image_ori.to(device=device, dtype=dtype)
-
+        import ipdb; ipdb.set_trace()
+        
         batch_size = batch_size * num_images_per_prompt
 
         if image.shape[1] == 4:

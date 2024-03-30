@@ -103,9 +103,9 @@ class CPDataset(data.Dataset):
 
         # load caption dict
         self.caption_dict = dict()
-        # caption_file_name = data_list.replace(".txt", "_captions.json")
-        # with open(osp.join(dataroot, caption_file_name), "r") as f:
-        #     self.caption_dict = json.load(f)
+        caption_file_name = data_list.replace(".txt", "_captions.json")
+        with open(osp.join(dataroot, caption_file_name), "r") as f:
+            self.caption_dict = json.load(f)
 
     def name(self):
         return "CPDataset"
