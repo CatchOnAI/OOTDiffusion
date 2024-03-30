@@ -1389,7 +1389,7 @@ class StableDiffusionControlNetPipeline(
 
                 # predict the noise residual
                 # UNet2DConditionModel
-                noise_pred = self.unet(
+                noise_pred = self.unet.forward( # TODO: Forward()
                     latent_model_input, # sample
                     t, # timestamp
                     encoder_hidden_states=prompt_embeds, # torch.Size([2, 77, 768])
@@ -1400,7 +1400,6 @@ class StableDiffusionControlNetPipeline(
                     added_cond_kwargs=added_cond_kwargs,
                     return_dict=False,
                 )[0]
-                import ipdb; ipdb.set_trace()
                 
 
                 # perform guidance
