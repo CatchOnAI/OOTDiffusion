@@ -34,41 +34,61 @@ from transformers import AutoProcessor, CLIPVisionModelWithProjection
 from transformers import CLIPTextModel, CLIPTokenizer
 from safetensors.torch import load_file
 
+
 class OOTDiffusionHD:
 
-    def __init__(self, gpu_id, **kwargs):
+    def __init__(self, gpu_id, use_sd=False, **kwargs):
         self.gpu_id = 'cuda:' + str(gpu_id)
 
         VAE_PATH = kwargs["vae_path"]
         MODEL_PATH = kwargs["model_path"]
         VIT_PATH = kwargs["vit_path"]
-
-        self.vae = AutoencoderKL.from_pretrained(
-            VAE_PATH,
-            subfolder="vae",
-            # torch_dtype=torch.float16,
-        )
+        
+        if use_sd:
+            self.vae = AutoencoderKL.from_pretrained("runwayml/stable-diffusion-v1-5")
+        else:
+            self.vae = AutoencoderKL.from_pretrained(
+                VAE_PATH,
+                subfolder="vae",
+                # torch_dtype=torch.float16,
+            )
     
         # unet_sd = load_file(f"{MODEL_PATH}/diffusion_pytorch_model.safetensors")
-        self.unet_garm = UNetGarm2DConditionModel.from_pretrained(
-            MODEL_PATH,
-            subfolder="ootd_hd/unet_garm",
-            # torch_dtype=torch.float16,
-            use_safetensors=True,
-            local_files_only=True,
-            low_cpu_mem_usage=False,
-            ignore_mismatched_sizes=True
-        )
+        if use_sd:
+            self.unet_garm = UNetGarm2DConditionModel.from_pretrained(
+                "runwayml/stable-diffusion-v1-5",
+                # torch_dtype=torch.float16,
+                use_safetensors=True,
+                low_cpu_mem_usage=False,
+            )
+        else:
+            self.unet_garm = UNetGarm2DConditionModel.from_pretrained(
+                MODEL_PATH,
+                subfolder="unet_garm",
+                # torch_dtype=torch.float16,
+                use_safetensors=True,
+                local_files_only=True,
+                low_cpu_mem_usage=False,
+                ignore_mismatched_sizes=True
+            )
 
-        self.unet_vton = UNetVton2DConditionModel.from_pretrained(
-            MODEL_PATH,
-            subfolder="ootd_hd/unet_vton",
-            # torch_dtype=torch.float16,
-            use_safetensors=True,
-            local_files_only=True,
-            low_cpu_mem_usage=False,
-            ignore_mismatched_sizes=True
-        )
+        if use_sd:
+            self.unet_vton = UNetVton2DConditionModel.from_pretrained(
+                "runwayml/stable-diffusion-v1-5",
+                # torch_dtype=torch.float16,
+                use_safetensors=True,
+                low_cpu_mem_usage=False,
+            )
+        else:
+            self.unet_vton = UNetVton2DConditionModel.from_pretrained(
+                MODEL_PATH,
+                subfolder="unet_vton",
+                # torch_dtype=torch.float16,
+                use_safetensors=True,
+                local_files_only=True,
+                low_cpu_mem_usage=False,
+                ignore_mismatched_sizes=True
+            )
         
         self.auto_processor = AutoProcessor.from_pretrained(VIT_PATH)
         self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(VIT_PATH).to(self.gpu_id)

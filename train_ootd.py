@@ -66,12 +66,16 @@ import wandb
 
 from ootd.train_ootd_hd import OOTDiffusionHD
 from ootd.pipelines_ootd.pipeline_ootd import OotdPipeline as OotdPipelineInference
-
+import torchvision
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 # check_min_version("0.27.0.dev0")
 
 logger = get_logger(__name__)
 
+
+def save_image(data, image_name=""):
+    cloth_path = f"test_{image_name}.jpg"
+    torchvision.utils.save_image(data, cloth_path)
 
 def image_grid(imgs, rows, cols):
     assert len(imgs) == rows * cols
@@ -120,7 +124,8 @@ def log_validation(model, args, accelerator, weight_dtype, test_dataloder):
                 image_vton = batch["inpaint_image"]
                 image_ori= batch["GT"]
                 mask = batch["inpaint_mask"]
-
+                import ipdb; ipdb.set_trace()
+                save_image(mask, "train_mask")
                 samples = pipeline(
                     prompt,
                     image_garm,
@@ -478,7 +483,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--validation_steps",
         type=int,
-        default=100,
+        default=0,
         help=(
             "Run validation every X steps. Validation consists of running the prompt"
             " `args.validation_prompt` multiple times: `args.num_validation_images`"
@@ -786,8 +791,13 @@ def main(args):
         model = OOTDiffusionHD(
             args.gpu_id, 
             vit_path="openai/clip-vit-large-patch14",
-            vae_path="/home/stevexu/VSprojects/OOTDiffusion/checkpoints/ootd", 
-            model_path="/home/stevexu/VSprojects/OOTDiffusion/checkpoints/train_ootd",
+            vae_path="checkpoints/ootd", 
+            model_path="checkpoints/ootd/ootd_hd/checkpoint-36000",
+            )
+    elif args.model_type == 'sd':
+        model = OOTDiffusionHD(
+            args.gpu_id, 
+            use_sd=True
             )
     else:
         raise NotImplementedError(f"Model type {args.model_type} not implemented")
@@ -847,10 +857,6 @@ def main(args):
         " doing mixed precision training, copy of the weights should still be float32."
     )
 
-    # if unwrap_model(controlnet).dtype != torch.float32:
-    #     raise ValueError(
-    #         f"Controlnet loaded as datatype {unwrap_model(controlnet).dtype}. {low_precision_error_string}"
-    #     )
 
     # Enable TF32 for faster training on Ampere GPUs,
     # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
@@ -1069,7 +1075,7 @@ def main(args):
                 image_ori = batch["GT"]
                 mask = batch["inpaint_mask"]
                 prompt = batch["prompt"]
-                
+                print("mask.size()", mask)
                 noise_pred, noise = model(
                     image_garm = image_garm,
                     image_vton = image_vton,
@@ -1178,8 +1184,8 @@ def main(args):
     # Create the pipeline using the trained modules and save it.
     # accelerator.wait_for_everyone()
     if accelerator.is_main_process:
-        controlnet = accelerate.unwrap_model(controlnet)
-        controlnet.save_pretrained(args.output_dir)
+        # controlnet = accelerate.unwrap_model(controlnet)
+        # controlnet.save_pretrained(args.output_dir)
 
         if args.push_to_hub:
             save_model_card(

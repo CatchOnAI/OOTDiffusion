@@ -285,10 +285,10 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
         )
 
         # 3. Preprocess image
-        image_garm = self.image_processor.preprocess(image_garm)
-        image_vton = self.image_processor.preprocess(image_vton)
-        image_ori = self.image_processor.preprocess(image_ori)
-        mask = self.image_processor.preprocess(mask)
+        image_garm = preprocess(image_garm)
+        image_vton = preprocess(image_vton)
+        image_ori = preprocess(image_ori)
+        mask = preprocess(mask)
         
         # 5. Prepare Image latents
         garm_latents = self.prepare_garm_latents(
@@ -332,9 +332,13 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
         # FIXME: the noise isn't used correctly
         noise = latents.clone()
 
+        t = torch.randint(0, self.scheduler.config.num_train_timesteps, (batch_size * num_images_per_prompt,), device=device)
+
+        if False:
+            print(UNetGarm2DConditionModel==UNetGarm2DConditionModel)
         _, spatial_attn_outputs = self.unet_garm(
             garm_latents,
-            0,
+            timestep = t,
             encoder_hidden_states=prompt_embeds,
             return_dict=False,
         )
@@ -342,7 +346,7 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
         latent_model_input = torch.cat([latents] * 2) if self.do_classifier_free_guidance else latents
 
         # concat latents, image_latents in the channel dimension
-        t = torch.randint(0, self.scheduler.num_train_timesteps, (batch_size * num_images_per_prompt,), device=device)
+        
         scaled_latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
         latent_vton_model_input = torch.cat([scaled_latent_model_input, vton_latents], dim=1)
 
@@ -355,6 +359,7 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
             encoder_hidden_states=prompt_embeds,
             return_dict=False,
         )[0]
+        
         # FIXME: noise_pred doesn't have grad_fn and requires_grad=False
         # TODO: recover the images for images logging
         noise_pred_shape = noise_pred.shape
@@ -675,7 +680,8 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
             else:
                 image_latents = self.vae.encode(image).latent_dist.mode()
                 image_ori_latents = self.vae.encode(image_ori).latent_dist.mode()
-
+        import ipdb; ipdb.set_trace()
+        
         mask = torch.nn.functional.interpolate(
             mask, size=(image_latents.size(-2), image_latents.size(-1))
         )
