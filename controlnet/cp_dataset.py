@@ -4,6 +4,7 @@ import os
 import os.path as osp
 import random
 from copy import deepcopy
+import copy
 
 import cv2
 import numpy as np
@@ -15,7 +16,22 @@ import torchvision.transforms as transforms
 from torchvision.transforms import ToPILImage
 from PIL import Image, ImageDraw
 from torch.utils.data import DataLoader
+from transformers import AutoTokenizer, PretrainedConfig
 
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    BinaryIO,
+    Callable,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+    overload,
+)
 
 def mask2bbox(mask):
     up = np.max(np.where(mask)[0])
@@ -70,7 +86,7 @@ class CPDataset(data.Dataset):
     Dataset for CP-VTON.
     """
 
-    def __init__(self, dataroot, image_size=512, mode="train", data_list: str = "train_pairs.txt", semantic_nc=13, unpaired=False):
+    def __init__(self, dataroot, image_size=512, mode="train", data_list: str = "subtrain_20.txt", semantic_nc=13, unpaired=False, pretrained_model_name_or_path="runwayml/stable-diffusion-v1-5"):
         super(CPDataset, self).__init__()
         # base setting
         self.root = dataroot
@@ -100,6 +116,12 @@ class CPDataset(data.Dataset):
         self.c_names = dict()
         self.c_names["paired"] = im_names
         self.c_names["unpaired"] = c_names
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            pretrained_model_name_or_path,
+            subfolder="tokenizer",
+            revision=None,
+            use_fast=False,
+        )
 
     def name(self):
         return "CPDataset"
@@ -343,6 +365,10 @@ class CPDataset(data.Dataset):
             print("File does not exist. ", caption_name)
             caption_string = "A cloth"  # Set caption_string to an empty string or handle the case when the file doesn't exist
 
+        captions = self.tokenizer(
+            caption_string, max_length=self.tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
+        )
+        
         c_img = np.array(c_img).astype(np.uint8)
         
         tensor_to_image(inpaint_warp_cloth, "./sample/inpaint_image.png", self.datamode == "test")
@@ -376,7 +402,8 @@ class CPDataset(data.Dataset):
             # "warp_feat": feat,
             "file_name": self.im_names[index],
             # "cloth_array": np.array(c_img).astype(np.uint8),
-            "input_id": caption_string,
+            "input_id": captions.input_ids,
+            "input_string": caption_string,
             "vton_image_orig": image_transforms(im_pil_big),
             "garm_image_orig": conditioning_image_transforms(garm_img),
         }
@@ -384,7 +411,7 @@ class CPDataset(data.Dataset):
 
     def __len__(self):
         return len(self.im_names)
-
+    
 
 def pre_alignment(c, cm, parse_roi):
     align_factor = 1.0

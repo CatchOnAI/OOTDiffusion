@@ -30,6 +30,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
+import torch.utils.data as data
+
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
@@ -67,6 +69,9 @@ check_min_version("0.27.0.dev0")
 
 logger = get_logger(__name__)
 
+image_column = "vton_image_orig"
+caption_column = "input_id"
+conditioning_image_column = "garm_image_orig"
 
 def image_grid(imgs, rows, cols):
     assert len(imgs) == rows * cols
@@ -620,50 +625,10 @@ def make_train_dataset_vton(args, tokenizer, accelerator):
     if args.dataroot is None:
         assert "Please provide correct data root"
     cp_dataset = CPDataset(args.dataroot, args.resolution, mode="train")
-    image_column = "vton_image_orig"
-    caption_column = "input_id"
-    conditioning_image_column = "garm_image_orig"
     
-    def tokenize_captions(examples, is_train=True):
-        captions = []
-        for example in examples:
-            caption = example["input_id"]
-            if random.random() < args.proportion_empty_prompts:
-                captions.append("")
-            elif isinstance(caption, str):
-                captions.append(caption)
-            elif isinstance(caption, (list, np.ndarray)):
-                # take a random caption if there are multiple
-                captions.append(random.choice(caption) if is_train else caption[0])
-            else:
-                raise ValueError(
-                    f"Caption column `{caption_column}` should contain either strings or lists of strings."
-                )
-        inputs = tokenizer(
-            captions, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
-        )
-        return inputs.input_ids
+    new_cp_dataset = copy.deepcopy(cp_dataset)
 
-    def preprocess_train(examples):
-        
-        images = [example[image_column] for example in examples]
-        conditioning_images = [example[conditioning_image_column] for example in examples]
-        
-        examples["pixel_values"] = images
-        examples["conditioning_pixel_values"] = conditioning_images
-        examples["input_ids"] = tokenize_captions(examples)
-
-        return examples
-
-    with accelerator.main_process_first():
-        if args.max_train_samples is not None:
-            cp_dataset = cp_dataset.shuffle(seed=args.seed).select(range(args.max_train_samples))
-        # Set the training transforms
-        # Apply the preprocessing function to the dataset
-        new_cp_dataset = copy.deepcopy(cp_dataset)
-        train_dataset = preprocess_train(new_cp_dataset)
-
-    return train_dataset
+    return new_cp_dataset
 
 
 
@@ -797,6 +762,22 @@ def collate_fn(examples):
         "conditioning_pixel_values": conditioning_pixel_values,
         "input_ids": input_ids,
     }
+
+def collate_fn_vton(examples):
+    # print(examples)
+    pixel_values = torch.stack([example["vton_image_orig"] for example in examples])
+    pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
+
+    conditioning_pixel_values = torch.stack([example["garm_image_orig"] for example in examples])
+    conditioning_pixel_values = conditioning_pixel_values.to(memory_format=torch.contiguous_format).float()
+    
+    input_ids = torch.stack([example["input_id"] for example in examples])
+
+    return {
+        "pixel_values": pixel_values,
+        "conditioning_pixel_values": conditioning_pixel_values,
+        "input_ids": input_ids,
+    } 
 
 
 def main(args):
@@ -983,10 +964,38 @@ def main(args):
 
     train_dataset = make_train_dataset_vton(args, tokenizer, accelerator)
 
+    def collate_fn_vton_all_captions(examples):
+        print(examples)
+        pixel_values = torch.stack([example["vton_image_orig"] for example in examples])
+        pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
+
+        conditioning_pixel_values = torch.stack([example["garm_image_orig"] for example in examples])
+        conditioning_pixel_values = conditioning_pixel_values.to(memory_format=torch.contiguous_format).float()
+        
+        captions = []
+        for example in examples:
+            caption = example["input_string"]
+            if random.random() < args.proportion_empty_prompts:
+                captions.append("")
+            elif isinstance(caption, str):
+                captions.append(caption)
+            
+        inputs = tokenizer(
+            captions, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
+        )
+        
+        input_ids = torch.stack([example for example in inputs.input_ids])
+
+        return {
+            "pixel_values": pixel_values,
+            "conditioning_pixel_values": conditioning_pixel_values,
+            "input_ids": input_ids,
+        } 
+
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         shuffle=True,
-        collate_fn=collate_fn,
+        collate_fn=collate_fn_vton,
         batch_size=args.train_batch_size,
         num_workers=args.dataloader_num_workers,
     )
@@ -1116,7 +1125,7 @@ def main(args):
                 # Add noise to the latents according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
-                noisy_latents_garm = noise_scheduler.add_noise(noise_garm, noise_garm, timesteps_garm)
+                noisy_latents_garm = noise_scheduler.add_noise(latents_garm, noise_garm, timesteps_garm)
                 
                 # Get the text embedding for conditioning
                 encoder_hidden_states = text_encoder(batch["input_ids"], return_dict=False)[0]
