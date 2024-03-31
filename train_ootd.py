@@ -266,7 +266,7 @@ def parse_args(input_args=None):
         default=None,
         help="The directory where the downloaded models and datasets will be stored.",
     )
-    parser.add_argument("--seed", type=int, default=None, help="A seed for reproducible training.")
+    parser.add_argument("--seed", type=int, default=-1, help="A seed for reproducible training.")
     parser.add_argument(
         "--resolution",
         type=int,
@@ -759,7 +759,7 @@ def collate_fn(examples):
     }
 
 def main(args):
-    args.notes = "add prompt preprocessor for prompt embeds."
+    args.notes = "Concate uncond_img_latents instead of making noise concate itself. Change time emb in unet_vton from t to 0."
     if args.report_to == "wandb" and args.hub_token is not None:
         raise ValueError(
             "You cannot use both --report_to=wandb and --hub_token due to a security risk of exposing your token."
@@ -1106,21 +1106,14 @@ def main(args):
                 inpaint_mask = batch["inpaint_mask"]
                 mask = batch["inpaint_mask"]
                 prompt = batch["prompt"]
-
-                # what is this doing?
-                prompt_image = model.auto_processor(images=image_garm, return_tensors="pt").to(args.gpu_id)
-                prompt_image = model.image_encoder(prompt_image.data['pixel_values']).image_embeds
-                prompt_image = prompt_image.unsqueeze(1)
-                prompt_embeds = model.text_encoder(model.tokenize_captions([""], 2).to(model.gpu_id))[0]
-                prompt_embeds[:, 1:] = prompt_image[:]
                 
                 noise_pred, noise = model(
+                    # FIXME: Prompt cannot be given directly because the it won't be combined with img embs in the model.
                     image_garm = image_garm,
                     image_vton = image_vton,
                     image_ori = image_ori,
-                    mask = mask, 
-                    prompt_embeds = prompt_embeds,            
-                    args = args
+                    mask = mask,            
+                    seed = args.seed,
                 )
                 
                 loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="mean")

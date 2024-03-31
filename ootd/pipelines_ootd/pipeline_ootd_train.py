@@ -153,19 +153,13 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
         image_vton: PipelineImageInput = None,
         mask: PipelineImageInput = None,
         image_ori: PipelineImageInput = None,
-        num_inference_steps: int = 100,
         guidance_scale: float = 7.5,
         image_guidance_scale: float = 1.5,
         negative_prompt: Optional[Union[str, List[str]]] = None,
         num_images_per_prompt: Optional[int] = 1,
-        eta: float = 0.0,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
-        latents: Optional[torch.FloatTensor] = None,
         prompt_embeds: Optional[torch.FloatTensor] = None,
         negative_prompt_embeds: Optional[torch.FloatTensor] = None,
-        output_type: Optional[str] = "pil",
-        return_dict: bool = True,
-        callback_on_step_end: Optional[Callable[[int, int, Dict], None]] = None,
         callback_on_step_end_tensor_inputs: List[str] = ["latents"],
         **kwargs,
     ):
@@ -285,7 +279,6 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
         )
 
         # 3. Preprocess image
-        # FIXME: the input images for image processors look unexpected
         image_garm = self.image_processor.preprocess(image_garm)
         image_vton = self.image_processor.preprocess(image_vton)
         image_ori = self.image_processor.preprocess(image_ori)
@@ -334,29 +327,33 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
         # )
         # noise = latents.clone()
 
-        t = torch.randint(0, self.scheduler.config.num_train_timesteps, (batch_size * num_images_per_prompt,), device=device)
-
-        if False:
-            print(UNetGarm2DConditionModel==UNetGarm2DConditionModel)
-        _, spatial_attn_outputs = self.unet_garm.forward(
-            garm_latents,
-            timestep = t,
-            encoder_hidden_states=prompt_embeds,
-            return_dict=False,
-        )
 
         # concat latents, image_latents in the channel dimension
+        uncond_image_latents = torch.zeros_like(image_ori_latents)
+        image_ori_latents = torch.cat([image_ori_latents, uncond_image_latents], dim=0) if self.do_classifier_free_guidance else image_ori_latents
+
         noise = torch.randn_like(image_ori_latents)
         t = torch.randint(0, self.scheduler.num_train_timesteps, (batch_size, ), device=device)
         noisy_latents = self.scheduler.add_noise(image_ori_latents, noise, t)
         # TODO: the following concatenation is necessary for classifier free guidance. 
         # But why is it?
-        latent_model_input = torch.cat([noisy_latents] * 2) if self.do_classifier_free_guidance else noisy_latents
-        latent_vton_model_input = torch.cat([latent_model_input, vton_latents], dim=1)
+        # TODO: The following change will make loss converge. But why?
+        # latent_model_input = torch.cat([noisy_latents] * 2) if self.do_classifier_free_guidance else noisy_latents
+        # latent_vton_model_input = torch.cat([latent_model_input, vton_latents], dim=1)
+        latent_vton_model_input = torch.cat([noisy_latents, vton_latents], dim=1)
+
+        # TODO: Should the time emb be 0 or t? Based on the loss and validation images it doen't bring difference.
+        _, spatial_attn_outputs = self.unet_garm(
+            garm_latents,
+            0,
+            # t,
+            encoder_hidden_states=prompt_embeds,
+            return_dict=False,
+        )
 
         # predict the noise residual
         spatial_attn_inputs = spatial_attn_outputs.copy()
-        noise_pred = self.unet_vton.forward(
+        noise_pred = self.unet_vton(
             latent_vton_model_input,
             spatial_attn_inputs,
             t,
