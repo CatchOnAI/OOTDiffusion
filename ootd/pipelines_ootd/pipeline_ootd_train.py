@@ -680,8 +680,7 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
             else:
                 image_latents = self.vae.encode(image).latent_dist.mode()
                 image_ori_latents = self.vae.encode(image_ori).latent_dist.mode()
-        import ipdb; ipdb.set_trace()
-        
+
         mask = torch.nn.functional.interpolate(
             mask, size=(image_latents.size(-2), image_latents.size(-1))
         )
