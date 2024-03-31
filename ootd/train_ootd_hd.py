@@ -120,14 +120,28 @@ class OOTDiffusionHD:
                 prompt=None,
                 prompt_embeds = None,
                 negative_prompt = None,
+                seed=-1,
                 **kwargs
     ):  
+        if seed == -1:
+            random.seed(time.time())
+            seed = random.randint(0, 2147483647)
+        print('Initial seed: ' + str(seed))
+        generator = torch.manual_seed(seed)
+
+        # FIXME: this is the only way to combine img embs and text embs
+        prompt_image = self.auto_processor(images=image_garm, return_tensors="pt").to(self.gpu_id)
+        prompt_image = self.image_encoder(prompt_image.data['pixel_values']).image_embeds
+        prompt_image = prompt_image.unsqueeze(1)
+        prompt_embeds = self.text_encoder(self.tokenize_captions([""], 2).to(self.gpu_id))[0]
+        prompt_embeds[:, 1:] = prompt_image[:]
+
         noise_pred, noise = self.pipe(
-            prompt=prompt,
+            prompt_embeds=prompt_embeds,
             image_garm=image_garm,
             image_vton=image_vton,
             mask=mask,
             image_ori=image_ori, 
-            prompt_embeds=prompt_embeds,
+            generator=generator,
         )
         return noise_pred, noise

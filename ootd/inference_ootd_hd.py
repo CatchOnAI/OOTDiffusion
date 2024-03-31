@@ -47,11 +47,6 @@ class OOTDiffusionHD:
             use_safetensors=True,
         )
 
-        # FIXME: check if parameters in the model are leaf?
-        if all(p.is_leaf for p in vae.parameters()):
-            # raise ValueError(f"Model parameters are all leaf.")
-            print(f"{__name__},loaded unet_garm parameters are all leaf.")
-
         unet_vton = UNetVton2DConditionModel.from_pretrained(
             UNET_PATH,
             subfolder="unet_vton",
