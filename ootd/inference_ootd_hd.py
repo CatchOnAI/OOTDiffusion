@@ -25,9 +25,9 @@ from transformers import AutoProcessor, CLIPVisionModelWithProjection
 from transformers import CLIPTextModel, CLIPTokenizer
 
 VIT_PATH = "openai/clip-vit-large-patch14"
-VAE_PATH = "/home/stevexu/VSprojects/OOTDiffusion/checkpoints/ootd"
-UNET_PATH = "/home/stevexu/VSprojects/OOTDiffusion/checkpoints/ootd/ootd_hd/checkpoint-36000"
-MODEL_PATH = "/home/stevexu/VSprojects/OOTDiffusion/checkpoints/ootd"
+VAE_PATH = "/workspace/OOTDiffusion/checkpoints/ootd"
+UNET_PATH = "/workspace/OOTDiffusion/checkpoints/ootd/ootd_hd/checkpoint-36000"
+MODEL_PATH = "/workspace/OOTDiffusion/checkpoints/ootd"
 
 class OOTDiffusionHD:
 

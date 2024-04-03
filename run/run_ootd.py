@@ -1,5 +1,6 @@
 from pathlib import Path
 import sys
+import os
 from PIL import Image
 from utils_ootd import get_mask_location
 
@@ -52,7 +53,9 @@ else:
 
 
 if __name__ == '__main__':
-
+    if not os.path.exists("./images_output"):
+        os.mkdir("./images_output")
+        
     if model_type == 'hd' and category != 0:
         raise ValueError("model_type \'hd\' requires category == 0 (upperbody)!")
 
