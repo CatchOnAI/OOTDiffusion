@@ -127,7 +127,6 @@ class OOTDiffusionHD:
         if seed == -1:
             random.seed(time.time())
             seed = random.randint(0, 2147483647)
-        print('Initial seed: ' + str(seed))
         generator = torch.manual_seed(seed)
 
         # FIXME: this is the only way to combine img embs and text embs

@@ -138,14 +138,15 @@ def log_validation(model, args, accelerator, weight_dtype, test_dataloder):
 
     for tracker in accelerator.trackers:
         if tracker.name == "wandb":
-            formatted_images = []
+            columns = ["Garment", "Masked Model", "Original Image", "Inpaint Mask", "Samples"]
+            my_table = wandb.Table(columns=columns)
             for log in image_logs:
-                formatted_images.append(wandb.Image(log["garment"], caption="garment images"))
-                formatted_images.append(wandb.Image(log["model"], caption="masked model images"))
-                formatted_images.append(wandb.Image(log["orig_img"], caption="original images"))
-                formatted_images.append(wandb.Image(log["mask"], caption="inpaint mask"))
-                formatted_images.append(wandb.Image(log["samples"], caption=log["prompt"]))
-            tracker.log({"validation": formatted_images})
+                my_table.add_data(wandb.Image(log["garment"]),
+                                  wandb.Image(log["model"]),
+                                  wandb.Image(log["orig_img"]),
+                                  wandb.Image(log["mask"]),
+                                  wandb.Image(log["samples"], caption=log["prompt"]))
+                tracker.log({"validation_table": my_table})
         else:
             logger.warn(f"image logging not implemented for {tracker.name}")
 
@@ -277,13 +278,13 @@ def parse_args(input_args=None):
         ),
     )
     parser.add_argument(
-        "--train_batch_size", type=int, default=4, help="Batch size (per device) for the training dataloader."
+        "--train_batch_size", type=int, default=1, help="Batch size (per device) for the training dataloader."
     )
     parser.add_argument("--num_train_epochs", type=int, default=100)
     parser.add_argument(
         "--max_train_steps",
         type=int,
-        default=None,
+        default=400,
         help="Total number of training steps to perform.  If provided, overrides num_train_epochs.",
     )
     parser.add_argument(
@@ -316,7 +317,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
-        default=1,
+        default=4,
         help="Number of updates steps to accumulate before performing a backward/update pass.",
     )
     parser.add_argument(
@@ -327,7 +328,7 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--learning_rate",
         type=float,
-        default=5e-6,
+        default=1e-5,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
     parser.add_argument(
@@ -1097,6 +1098,7 @@ def main(args):
     
     # training starts!
     for epoch in range(first_epoch, args.num_train_epochs):
+        print(f"Epoch {epoch}")
         for step, batch in enumerate(train_dataloader):
             with accelerator.autocast():
             # with torch.autocast("cuda"):

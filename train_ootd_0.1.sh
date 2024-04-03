@@ -5,9 +5,9 @@ CUDA_VISIBLE_DEVICES=1 python /home/dwang/miniconda3/envs/ootd/bin/accelerate la
     --output_dir="output/logs/train_ootd" \
     --dataset_name="SaffalPoosh/VITON-HD-test" \
     --resolution="512" \
-    --dataroot="/opt/disk1/dwang/sci/DVTON/data/updated-VITON-HD/" \
-    --train_data_list="train_pairs.txt" \
-    --test_data_list="test_pairs.txt" \
+    --dataroot="/opt/disk1/dwang/sci/DVTON/data/updated-VITON-HD" \
+    --train_data_list="subtrain_0.1.txt" \
+    --test_data_list="subtrain_0.1.txt" \
     --use_8bit_adam \
     --gradient_checkpointing \
     --enable_xformers_memory_efficient_attention \
