@@ -27,3 +27,4 @@ wandb/
 internal/
 checkpoints/
 images_output/
+data/

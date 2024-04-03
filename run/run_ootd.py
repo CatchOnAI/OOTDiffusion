@@ -15,8 +15,8 @@ from ootd.inference_ootd_dc import OOTDiffusionDC
 import argparse
 parser = argparse.ArgumentParser(description='run ootd')
 parser.add_argument('--gpu_id', '-g', type=int, default=0, required=False)
-parser.add_argument('--model_path', type=str, default="", required=True)
-parser.add_argument('--cloth_path', type=str, default="", required=True)
+parser.add_argument('--model_path', type=str, default="/workspace/OOTDiffusion/data/VITON-HD/test/image/00006_00.jpg", required=False)
+parser.add_argument('--cloth_path', type=str, default="/workspace/OOTDiffusion/data/VITON-HD/test/cloth/00006_00.jpg", required=False)
 parser.add_argument('--model_type', type=str, default="hd", required=False)
 parser.add_argument('--category', '-c', type=int, default=0, required=False)
 parser.add_argument('--scale', type=float, default=2.0, required=False)
