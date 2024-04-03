@@ -1,6 +1,6 @@
 *.ckpt
 __pycache__/
-.vscode/
+# .vscode/
 *.pyc
 .uuid
 
