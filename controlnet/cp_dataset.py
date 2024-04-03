@@ -86,7 +86,7 @@ class CPDataset(data.Dataset):
     Dataset for CP-VTON.
     """
 
-    def __init__(self, dataroot, image_size=512, mode="train", data_list: str = "subtrain_20.txt", semantic_nc=13, unpaired=False, pretrained_model_name_or_path="runwayml/stable-diffusion-v1-5"):
+    def __init__(self, dataroot, image_size=512, mode="train", data_list: str = "train_pairs.txt", semantic_nc=13, unpaired=False, pretrained_model_name_or_path="runwayml/stable-diffusion-v1-5"):
         super(CPDataset, self).__init__()
         # base setting
         self.root = dataroot

@@ -53,7 +53,7 @@ from diffusers import (
     UNet2DConditionModel,
     UniPCMultistepScheduler,
 )
-from pipeline.pipeline_orig import StableDiffusionControlNetPipeline
+from pipeline.pipeline_inpaint import StableDiffusionControlNetInpaintPipeline
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.hub_utils import load_or_create_model_card, populate_model_card
@@ -94,7 +94,8 @@ def log_validation(
     else:
         controlnet = ControlNetModel.from_pretrained(args.output_dir, torch_dtype=weight_dtype)
 
-    pipeline = StableDiffusionControlNetPipeline.from_pretrained(
+
+    pipeline = StableDiffusionControlNetInpaintPipeline.from_pretrained(
         args.pretrained_model_name_or_path,
         vae=vae,
         text_encoder=text_encoder,
@@ -120,13 +121,16 @@ def log_validation(
 
     if len(args.validation_image) == len(args.validation_prompt):
         validation_images = args.validation_image
+        validation_images_garm = args.validation_image_garm
         validation_prompts = args.validation_prompt
     elif len(args.validation_image) == 1:
         validation_images = args.validation_image * len(args.validation_prompt)
         validation_prompts = args.validation_prompt
+        validation_images_garm = args.validation_image_garm * len(args.validation_image_garm)
     elif len(args.validation_prompt) == 1:
         validation_images = args.validation_image
         validation_prompts = args.validation_prompt * len(args.validation_image)
+        validation_images_garm = args.validation_image_garm * len(args.validation_image_garm)
     else:
         raise ValueError(
             "number of `args.validation_image` and `args.validation_prompt` should be checked in `parse_args`"
@@ -135,15 +139,17 @@ def log_validation(
     image_logs = []
     inference_ctx = contextlib.nullcontext() if is_final_validation else torch.autocast("cuda")
 
-    for validation_prompt, validation_image in zip(validation_prompts, validation_images):
+    for validation_prompt, validation_image, validation_image_garm in zip(validation_prompts, validation_images, validation_images_garm):
         validation_image = Image.open(validation_image).convert("RGB")
-
+        validation_image_garm = Image.open(validation_image_garm).convert("RGB")
+        
         images = []
 
         for _ in range(args.num_validation_images):
             with inference_ctx:
+                width, height = validation_image.size
                 image = pipeline(
-                    validation_prompt, validation_image, num_inference_steps=20, generator=generator
+                    validation_prompt, validation_image, np.full((height, width), 255, dtype=np.uint8), validation_image_garm, num_inference_steps=20, generator=generator
                 ).images[0]
 
             images.append(image)
@@ -224,8 +230,11 @@ def save_model_card(repo_id: str, image_logs=None, base_model=str, repo_folder=N
             validation_prompt = log["validation_prompt"]
             validation_image = log["validation_image"]
             validation_image.save(os.path.join(repo_folder, "image_control.png"))
+            validation_image_garm = log["validation_image_garm"]
+            validation_image_garm.save(os.path.join(repo_folder, "image_control_garm.png"))
             img_str += f"prompt: {validation_prompt}\n"
             images = [validation_image] + images
+            images = [validation_image_garm] + images
             image_grid(images, 1, len(images)).save(os.path.join(repo_folder, f"images_{i}.png"))
             img_str += f"![images_{i})](./images_{i}.png)\n"
 
@@ -543,6 +552,18 @@ def parse_args(input_args=None):
             " and logged to `--report_to`. Provide either a matching number of `--validation_prompt`s, a"
             " a single `--validation_prompt` to be used with all `--validation_image`s, or a single"
             " `--validation_image` that will be used with all `--validation_prompt`s."
+        ),
+    )
+    parser.add_argument(
+        "--validation_image_garm",
+        type=str,
+        default=None,
+        nargs="+",
+        help=(
+            "A set of paths to the controlnet conditioning image be evaluated every `--validation_steps`"
+            " and logged to `--report_to`. Provide either a matching number of `--validation_prompt`s, a"
+            " a single `--validation_prompt` to be used with all `--validation_image_garm`s, or a single"
+            " `--validation_image_garm` that will be used with all `--validation_prompt`s."
         ),
     )
     parser.add_argument(
@@ -1049,6 +1070,7 @@ def main(args):
         # tensorboard cannot handle list types for config
         tracker_config.pop("validation_prompt")
         tracker_config.pop("validation_image")
+        tracker_config.pop("validation_image_garm")
 
         accelerator.init_trackers(args.tracker_project_name, config=tracker_config)
 
@@ -1107,7 +1129,7 @@ def main(args):
             with accelerator.accumulate(controlnet):
                 # Convert images to latent space
                 latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
-                latents_garm = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
+                latents_garm = vae.encode(batch["conditioning_pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
                 latents_garm = latents_garm * vae.config.scaling_factor
                 
