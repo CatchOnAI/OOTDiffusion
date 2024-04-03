@@ -33,3 +33,4 @@ output/
 wandb/
 images_output/
 wandb
+/controlnet/wandb/

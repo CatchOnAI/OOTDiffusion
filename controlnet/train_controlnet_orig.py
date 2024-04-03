@@ -14,34 +14,36 @@
 # See the License for the specific language governing permissions and
 
 import argparse
+import copy
+import contextlib
+import gc
 import logging
-import itertools
 import math
 import os
 import random
 import shutil
-import json
 from pathlib import Path
-
-import sys
-# sys.path.append('/opt/disk1/dwang/sci/DVTON/OOTDiffusion/ootd')
+from copy import deepcopy
 
 import accelerate
 import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
+import torch.utils.data as data
+
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
+from datasets import load_dataset
 from huggingface_hub import create_repo, upload_folder
 from packaging import version
 from PIL import Image
 from torchvision import transforms
 from tqdm.auto import tqdm
 from transformers import AutoTokenizer, PretrainedConfig
-from utils_ootd import get_mask_location
+from cp_dataset import CPDataset
 
 import diffusers
 from diffusers import (
@@ -51,26 +53,25 @@ from diffusers import (
     UNet2DConditionModel,
     UniPCMultistepScheduler,
 )
+from pipeline.pipeline_inpaint import StableDiffusionControlNetInpaintPipeline
 from diffusers.optimization import get_scheduler
 from diffusers.utils import check_min_version, is_wandb_available
 from diffusers.utils.hub_utils import load_or_create_model_card, populate_model_card
 from diffusers.utils.import_utils import is_xformers_available
 from diffusers.utils.torch_utils import is_compiled_module
-from cp_dataset import CPDataset
-from pipeline.pipeline_controlnet import (StableDiffusionControlNetPipeline)
-from ootd.pipelines_ootd.unet_vton_2d_condition import UNetVton2DConditionModel
+
 
 if is_wandb_available():
     import wandb
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
-# check_min_version("0.27.0.dev0")
+check_min_version("0.27.0.dev0")
 
 logger = get_logger(__name__)
 
-category_dict = ['upperbody', 'lowerbody', 'dress']
-category_dict_utils = ['upper_body', 'lower_body', 'dresses']
-
+image_column = "vton_image_orig"
+caption_column = "input_id"
+conditioning_image_column = "garm_image_orig"
 
 def image_grid(imgs, rows, cols):
     assert len(imgs) == rows * cols
@@ -83,12 +84,18 @@ def image_grid(imgs, rows, cols):
     return grid
 
 
-def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, accelerator, weight_dtype, step):
+def log_validation(
+    vae, text_encoder, tokenizer, unet, controlnet, args, accelerator, weight_dtype, step, is_final_validation=False
+):
     logger.info("Running validation... ")
 
-    controlnet = accelerator.unwrap_model(controlnet)
+    if not is_final_validation:
+        controlnet = accelerator.unwrap_model(controlnet)
+    else:
+        controlnet = ControlNetModel.from_pretrained(args.output_dir, torch_dtype=weight_dtype)
 
-    pipeline = StableDiffusionControlNetPipeline.from_pretrained(
+
+    pipeline = StableDiffusionControlNetInpaintPipeline.from_pretrained(
         args.pretrained_model_name_or_path,
         vae=vae,
         text_encoder=text_encoder,
@@ -114,47 +121,35 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
 
     if len(args.validation_image) == len(args.validation_prompt):
         validation_images = args.validation_image
-        validation_prompts = args.validation_prompt
         validation_images_garm = args.validation_image_garm
+        validation_prompts = args.validation_prompt
     elif len(args.validation_image) == 1:
         validation_images = args.validation_image * len(args.validation_prompt)
         validation_prompts = args.validation_prompt
-        validation_images_garm = args.validation_image_garm
+        validation_images_garm = args.validation_image_garm * len(args.validation_image_garm)
     elif len(args.validation_prompt) == 1:
         validation_images = args.validation_image
         validation_prompts = args.validation_prompt * len(args.validation_image)
-        validation_images_garm = args.validation_image_garm
+        validation_images_garm = args.validation_image_garm * len(args.validation_image_garm)
     else:
         raise ValueError(
             "number of `args.validation_image` and `args.validation_prompt` should be checked in `parse_args`"
         )
 
     image_logs = []
+    inference_ctx = contextlib.nullcontext() if is_final_validation else torch.autocast("cuda")
 
     for validation_prompt, validation_image, validation_image_garm in zip(validation_prompts, validation_images, validation_images_garm):
-        with open(validation_image.replace(".jpg", "_keypoints.json")) as f:
-            keypoints = json.load(f)["people"][0]
-        model_parse = Image.open(validation_image.replace(".jpg", ".png"))
         validation_image = Image.open(validation_image).convert("RGB")
         validation_image_garm = Image.open(validation_image_garm).convert("RGB")
-        # validation_original_image = Image.open(validation_original_image).convert("RGB")
-        
-        mask, mask_gray = get_mask_location("hd", category_dict_utils[0], model_parse, keypoints)
-        mask = mask.resize((768, 1024), Image.NEAREST)
-        mask_gray = mask_gray.resize((768, 1024), Image.NEAREST)
-        
-        masked_vton_img = Image.composite(mask_gray, validation_image, mask)
-        masked_vton_img.save('./debug/sample_mask.jpg')
-        mask.save('./debug/mask.jpg')
-        validation_image_garm.save('./debug/validation_image_garm.jpg')
-        validation_image.save('./debug/validation_image.jpg')
         
         images = []
 
         for _ in range(args.num_validation_images):
-            with torch.autocast("cuda"):
+            with inference_ctx:
+                width, height = validation_image.size
                 image = pipeline(
-                    validation_prompt, masked_vton_img, validation_image_garm, mask, validation_image, num_inference_steps=20, generator=generator
+                    validation_prompt, validation_image, np.full((height, width), 255, dtype=np.uint8), validation_image_garm, num_inference_steps=20, generator=generator
                 ).images[0]
 
             images.append(image)
@@ -163,6 +158,7 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
             {"validation_image": validation_image, "images": images, "validation_prompt": validation_prompt}
         )
 
+    tracker_key = "test" if is_final_validation else "validation"
     for tracker in accelerator.trackers:
         if tracker.name == "tensorboard":
             for log in image_logs:
@@ -194,9 +190,13 @@ def log_validation(vae, text_encoder, tokenizer, unet, controlnet, args, acceler
                     image = wandb.Image(image, caption=validation_prompt)
                     formatted_images.append(image)
 
-            tracker.log({"validation": formatted_images})
+            tracker.log({tracker_key: formatted_images})
         else:
-            logger.warn(f"image logging not implemented for {tracker.name}")
+            logger.warning(f"image logging not implemented for {tracker.name}")
+
+        del pipeline
+        gc.collect()
+        torch.cuda.empty_cache()
 
         return image_logs
 
@@ -224,19 +224,26 @@ def import_model_class_from_model_name_or_path(pretrained_model_name_or_path: st
 def save_model_card(repo_id: str, image_logs=None, base_model=str, repo_folder=None):
     img_str = ""
     if image_logs is not None:
-        img_str = "You can find some example images below.\n"
+        img_str = "You can find some example images below.\n\n"
         for i, log in enumerate(image_logs):
             images = log["images"]
             validation_prompt = log["validation_prompt"]
             validation_image = log["validation_image"]
             validation_image.save(os.path.join(repo_folder, "image_control.png"))
+            validation_image_garm = log["validation_image_garm"]
+            validation_image_garm.save(os.path.join(repo_folder, "image_control_garm.png"))
             img_str += f"prompt: {validation_prompt}\n"
             images = [validation_image] + images
+            images = [validation_image_garm] + images
             image_grid(images, 1, len(images)).save(os.path.join(repo_folder, f"images_{i}.png"))
             img_str += f"![images_{i})](./images_{i}.png)\n"
 
-    model_description = f"""controlnet-{repo_id} 
-    These are controlnet weights trained on {base_model} with new type of conditioning.{img_str}"""
+    model_description = f"""
+# controlnet-{repo_id}
+
+These are controlnet weights trained on {base_model} with new type of conditioning.
+{img_str}
+"""
     model_card = load_or_create_model_card(
         repo_id_or_path=repo_id,
         from_training=True,
@@ -252,6 +259,7 @@ def save_model_card(repo_id: str, image_logs=None, base_model=str, repo_folder=N
         "text-to-image",
         "diffusers",
         "controlnet",
+        "diffusers-training",
     ]
     model_card = populate_model_card(model_card, tags=tags)
 
@@ -496,7 +504,12 @@ def parse_args(input_args=None):
     parser.add_argument(
         "--image_column", type=str, default="image", help="The column of the dataset containing the target image."
     )
-
+    parser.add_argument(
+        "--conditioning_image_column",
+        type=str,
+        default="conditioning_image",
+        help="The column of the dataset containing the controlnet conditioning image.",
+    )
     parser.add_argument(
         "--caption_column",
         type=str,
@@ -548,21 +561,9 @@ def parse_args(input_args=None):
         nargs="+",
         help=(
             "A set of paths to the controlnet conditioning image be evaluated every `--validation_steps`"
-            " and logged to `--report_to`. Provide either a matching number of `--validation_image_garm`s, a"
-            " a single `--validation_image_garm` to be used with all `--validation_image_garm`s, or a single"
-            " `--validation_image_garm` that will be used with all `--validation_image_garm`s."
-        ),
-    )
-    parser.add_argument(
-        "--validation_original_image",
-        type=str,
-        default=None,
-        nargs="+",
-        help=(
-            "A set of paths to the controlnet conditioning image be evaluated every `--validation_steps`"
-            " and logged to `--report_to`. Provide either a matching number of `--validation_original_image`s, a"
-            " a single `--validation_original_image` to be used with all `--validation_original_image`s, or a single"
-            " `--validation_original_image` that will be used with all `--validation_original_image`s."
+            " and logged to `--report_to`. Provide either a matching number of `--validation_prompt`s, a"
+            " a single `--validation_prompt` to be used with all `--validation_image_garm`s, or a single"
+            " `--validation_image_garm` that will be used with all `--validation_prompt`s."
         ),
     )
     parser.add_argument(
@@ -591,57 +592,11 @@ def parse_args(input_args=None):
         ),
     )
     parser.add_argument(
-        "--cloth",
-        type=str,
-        default=None,
-    )
-    parser.add_argument(
-        "--cloth_mask",
-        type=str,
-        default=None,
-    )
-    parser.add_argument(
-        "--cloth_parse",
-        type=str,
-        default=None,
-    )
-    parser.add_argument(
-        "--dense",
-        type=str,
-        default=None,
-    )
-    parser.add_argument(
-        "--image",
-        type=str,
-        default=None,
-    )
-    
-    parser.add_argument(
-        "--openpose_json",
-        type=str,
-        default=None,
-    )
-    parser.add_argument(
-        "--parse",
-        type=str,
-        default=None,
-    )
-    parser.add_argument(
         "--dataroot",
         type=str,
         default=None,
     )
 
-    parser.add_argument(
-        "--data_list",
-        type=str,
-        default=None,
-    parser.add_argument(
-        "--train_base",
-        type=bool,
-        default=False,
-    )
-    
     if input_args is not None:
         args = parser.parse_args(input_args)
     else:
@@ -682,6 +637,23 @@ def parse_args(input_args=None):
     return args
 
 
+def make_train_dataset_vton(args, tokenizer, accelerator):
+    # Get the datasets: you can either provide your own training and evaluation files (see below)
+    # or specify a Dataset from the hub (the dataset will be downloaded automatically from the datasets Hub).
+
+    # In distributed training, the load_dataset function guarantees that only one local process can concurrently
+    # download the dataset.
+    if args.dataroot is None:
+        assert "Please provide correct data root"
+    cp_dataset = CPDataset(args.dataroot, args.resolution, mode="train")
+    
+    new_cp_dataset = copy.deepcopy(cp_dataset)
+
+    return new_cp_dataset
+
+
+
+
 def make_train_dataset(args, tokenizer, accelerator):
     # Get the datasets: you can either provide your own training and evaluation files (see below)
     # or specify a Dataset from the hub (the dataset will be downloaded automatically from the datasets Hub).
@@ -709,79 +681,39 @@ def make_train_dataset(args, tokenizer, accelerator):
     column_names = dataset["train"].column_names
 
     # 6. Get the column names for input/target.
-    if args.cloth is None:
-        cloth = column_names[0]
-        logger.info(f"image column defaulting to {cloth}")
+    if args.image_column is None:
+        image_column = column_names[0]
+        logger.info(f"image column defaulting to {image_column}")
     else:
-        cloth = args.cloth
-        if cloth not in column_names:
+        image_column = args.image_column
+        if image_column not in column_names:
             raise ValueError(
-                f"`--cloth` value '{args.cloth}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
+                f"`--image_column` value '{args.image_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
             )
 
-    if args.cloth_mask is None:
-        cloth_mask = column_names[1]
-        logger.info(f"caption column defaulting to {cloth_mask}")
+    if args.caption_column is None:
+        caption_column = column_names[1]
+        logger.info(f"caption column defaulting to {caption_column}")
     else:
-        cloth_mask = args.cloth_mask
-        if cloth_mask not in column_names:
+        caption_column = args.caption_column
+        if caption_column not in column_names:
             raise ValueError(
-                f"`--cloth_mask` value '{args.cloth_mask}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
+                f"`--caption_column` value '{args.caption_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
             )
 
-    if args.cloth_parse is None:
-        cloth_parse = column_names[2]
-        logger.info(f"conditioning image column defaulting to {cloth_parse}")
+    if args.conditioning_image_column is None:
+        conditioning_image_column = column_names[2]
+        logger.info(f"conditioning image column defaulting to {conditioning_image_column}")
     else:
-        cloth_parse = args.cloth_parse
-        if cloth_parse not in column_names:
+        conditioning_image_column = args.conditioning_image_column
+        if conditioning_image_column not in column_names:
             raise ValueError(
-                f"`--cloth_parse` value '{args.cloth_parse}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
-            )
-        
-    if args.dense is None:
-        dense = column_names[3]
-        logger.info(f"conditioning image column defaulting to {dense}")
-    else:
-        dense = args.dense
-        if dense not in column_names:
-            raise ValueError(
-                f"`--dense` value '{args.dense}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
-            )
-    
-    if args.image is None:
-        image = column_names[4]
-        logger.info(f"conditioning image column defaulting to {image}")
-    else:
-        image = args.image
-        if image not in column_names:
-            raise ValueError(
-                f"`--image` value '{args.image}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
-            )
-        
-    if args.openpose_json is None:
-        openpose_json = column_names[5]
-        logger.info(f"conditioning image column defaulting to {openpose_json}")
-    else:
-        openpose_json = args.openpose_json
-        if openpose_json not in column_names:
-            raise ValueError(
-                f"`--openpose_json` value '{args.openpose_json}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
-            )
-        
-    if args.parse is None:
-        parse = column_names[6]
-        logger.info(f"conditioning image column defaulting to {parse}")
-    else:
-        parse = args.parse
-        if parse not in column_names:
-            raise ValueError(
-                f"`--parse` value '{args.parse}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
+                f"`--conditioning_image_column` value '{args.conditioning_image_column}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
             )
 
     def tokenize_captions(examples, is_train=True):
         captions = []
-        for caption in examples["input_ids"]:
+        for caption in examples[caption_column]:
             if random.random() < args.proportion_empty_prompts:
                 captions.append("")
             elif isinstance(caption, str):
@@ -791,7 +723,7 @@ def make_train_dataset(args, tokenizer, accelerator):
                 captions.append(random.choice(caption) if is_train else caption[0])
             else:
                 raise ValueError(
-                    f"Caption column input_ids should contain either strings or lists of strings."
+                    f"Caption column `{caption_column}` should contain either strings or lists of strings."
                 )
         inputs = tokenizer(
             captions, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
@@ -816,10 +748,10 @@ def make_train_dataset(args, tokenizer, accelerator):
     )
 
     def preprocess_train(examples):
-        images = [image.convert("RGB") for image in examples[image]]
+        images = [image.convert("RGB") for image in examples[image_column]]
         images = [image_transforms(image) for image in images]
 
-        conditioning_images = [image.convert("RGB") for image in examples[cloth]]
+        conditioning_images = [image.convert("RGB") for image in examples[conditioning_image_column]]
         conditioning_images = [conditioning_image_transforms(image) for image in conditioning_images]
 
         examples["pixel_values"] = images
@@ -836,6 +768,7 @@ def make_train_dataset(args, tokenizer, accelerator):
 
     return train_dataset
 
+
 def collate_fn(examples):
     pixel_values = torch.stack([example["pixel_values"] for example in examples])
     pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
@@ -851,48 +784,21 @@ def collate_fn(examples):
         "input_ids": input_ids,
     }
 
-def prepare_garm_latents(
-    self, image, batch_size, num_images_per_prompt, dtype, device, do_classifier_free_guidance, generator=None
-):
-    if not isinstance(image, (torch.Tensor, PIL.Image.Image, list)):
-        raise ValueError(
-            f"`image` has to be of type `torch.Tensor`, `PIL.Image.Image` or list but is {type(image)}"
-        )
+def collate_fn_vton(examples):
+    # print(examples)
+    pixel_values = torch.stack([example["vton_image_orig"] for example in examples])
+    pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
 
-    image = image.to(device=device, dtype=dtype)
+    conditioning_pixel_values = torch.stack([example["garm_image_orig"] for example in examples])
+    conditioning_pixel_values = conditioning_pixel_values.to(memory_format=torch.contiguous_format).float()
+    
+    input_ids = torch.stack([example["input_id"] for example in examples])
 
-    batch_size = batch_size * num_images_per_prompt
-
-    if image.shape[1] == 4:
-        image_latents = image
-    else:
-        if isinstance(generator, list) and len(generator) != batch_size:
-            raise ValueError(
-                f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
-                f" size of {batch_size}. Make sure the batch size matches the length of the generators."
-            )
-
-        if isinstance(generator, list):
-            image_latents = [self.vae.encode(image[i : i + 1]).latent_dist.mode() for i in range(batch_size)]
-            image_latents = torch.cat(image_latents, dim=0)
-        else:
-            image_latents = self.vae.encode(image).latent_dist.mode()
-
-    if batch_size > image_latents.shape[0] and batch_size % image_latents.shape[0] == 0:
-        additional_image_per_prompt = batch_size // image_latents.shape[0]
-        image_latents = torch.cat([image_latents] * additional_image_per_prompt, dim=0)
-    elif batch_size > image_latents.shape[0] and batch_size % image_latents.shape[0] != 0:
-        raise ValueError(
-            f"Cannot duplicate `image` of batch size {image_latents.shape[0]} to {batch_size} text prompts."
-        )
-    else:
-        image_latents = torch.cat([image_latents], dim=0)
-
-    if do_classifier_free_guidance:
-        uncond_image_latents = torch.zeros_like(image_latents)
-        image_latents = torch.cat([image_latents, uncond_image_latents], dim=0)
-
-    return image_latents
+    return {
+        "pixel_values": pixel_values,
+        "conditioning_pixel_values": conditioning_pixel_values,
+        "input_ids": input_ids,
+    } 
 
 
 def main(args):
@@ -958,7 +864,7 @@ def main(args):
     # Load scheduler and models
     noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
     text_encoder = text_encoder_cls.from_pretrained(
-        args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision
+        args.pretrained_model_name_or_path, subfolder="text_encoder", revision=args.revision, variant=args.variant
     )
     vae = AutoencoderKL.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, variant=args.variant
@@ -969,10 +875,10 @@ def main(args):
 
     if args.controlnet_model_name_or_path:
         logger.info("Loading existing controlnet weights")
-        _controlnet = ControlNetModel.from_pretrained(args.controlnet_model_name_or_path)
+        controlnet = ControlNetModel.from_pretrained(args.controlnet_model_name_or_path)
     else:
         logger.info("Initializing controlnet weights from unet")
-        _controlnet = ControlNetModel.from_unet(unet)
+        controlnet = ControlNetModel.from_unet(unet)
 
     # Taken from [Sayak Paul's Diffusers PR #6511](https://github.com/huggingface/diffusers/pull/6511/files)
     def unwrap_model(model):
@@ -1015,10 +921,6 @@ def main(args):
     unet.requires_grad_(False)
     text_encoder.requires_grad_(False)
     controlnet.train()
-    if any([not p.is_leaf for p in controlnet.parameters()]):
-        print("Controlnet have trainable parameters")
-    elif all([p.is_leaf for p in controlnet.parameters()]):
-        print("Controlnet have no trainable parameters")
 
     if args.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
@@ -1026,16 +928,16 @@ def main(args):
 
             xformers_version = version.parse(xformers.__version__)
             if xformers_version == version.parse("0.0.16"):
-                logger.warn(
+                logger.warning(
                     "xFormers 0.0.16 cannot be used for training in some GPUs. If you observe problems during training, please update xFormers to at least 0.0.17. See https://huggingface.co/docs/diffusers/main/en/optimization/xformers for more details."
                 )
             unet.enable_xformers_memory_efficient_attention()
-            _controlnet.enable_xformers_memory_efficient_attention()
+            controlnet.enable_xformers_memory_efficient_attention()
         else:
             raise ValueError("xformers is not available. Make sure it is installed correctly")
 
     if args.gradient_checkpointing:
-        _controlnet.enable_gradient_checkpointing()
+        controlnet.enable_gradient_checkpointing()
 
     # Check that all trainable models are in full precision
     low_precision_error_string = (
@@ -1043,9 +945,9 @@ def main(args):
         " doing mixed precision training, copy of the weights should still be float32."
     )
 
-    if unwrap_model(_controlnet).dtype != torch.float32:
+    if unwrap_model(controlnet).dtype != torch.float32:
         raise ValueError(
-            f"Controlnet loaded as datatype {unwrap_model(_controlnet).dtype}. {low_precision_error_string}"
+            f"Controlnet loaded as datatype {unwrap_model(controlnet).dtype}. {low_precision_error_string}"
         )
 
     # Enable TF32 for faster training on Ampere GPUs,
@@ -1072,16 +974,7 @@ def main(args):
         optimizer_class = torch.optim.AdamW
 
     # Optimizer creation
-    
-    controlnet.requires_grad_(True)
-    # unet.requires_grad_(True)
-    
-    params_to_optimize = list(filter(lambda p: p.requires_grad, controlnet.parameters()))
-    if args.train_base:
-        params_to_optimize = params_to_optimize + list(filter(lambda p: p.requires_grad, unet.parameters()))
-    
-    print(f"trainable params number: {len(params_to_optimize)}")
-    
+    params_to_optimize = controlnet.parameters()
     optimizer = optimizer_class(
         params_to_optimize,
         lr=args.learning_rate,
@@ -1090,58 +983,40 @@ def main(args):
         eps=args.adam_epsilon,
     )
 
-    if args.dataroot is None:
-        assert "Please provide correct data root"
-    # train_dataset = make_train_dataset(args, tokenizer, accelerator)
-    train_dataset = CPDataset(args.dataroot, args.resolution, mode="train", data_list=args.data_list)
+    train_dataset = make_train_dataset_vton(args, tokenizer, accelerator)
 
-    def collate_fn_cp(examples):
-        pixel_values = torch.stack([example["inpaint_image"] for example in examples])
+    def collate_fn_vton_all_captions(examples):
+        print(examples)
+        pixel_values = torch.stack([example["vton_image_orig"] for example in examples])
         pixel_values = pixel_values.to(memory_format=torch.contiguous_format).float()
 
-        conditioning_pixel_values = torch.stack([example["inpaint_pa"] for example in examples])
+        conditioning_pixel_values = torch.stack([example["garm_image_orig"] for example in examples])
         conditioning_pixel_values = conditioning_pixel_values.to(memory_format=torch.contiguous_format).float()
-
-        pixel_values_garm = torch.stack([example["inpaint_pa"] for example in examples])
-        pixel_values_garm = conditioning_pixel_values.to(memory_format=torch.contiguous_format).float()
-
-        inpaint_mask = torch.stack([example["inpaint_mask"] for example in examples])
-        inpaint_mask = inpaint_mask.to(memory_format=torch.contiguous_format).float()
-
-        def tokenize_captions_internal(is_train=True):
-            captions = []
-            for example in examples:
-                caption = example["input_id"]
-                if random.random() < args.proportion_empty_prompts:
-                    captions.append("")
-                elif isinstance(caption, str):
-                    captions.append(caption)
-                elif isinstance(caption, (list, np.ndarray)):
-                    # take a random caption if there are multiple
-                    captions.append(random.choice(caption) if is_train else caption[0])
-                else:
-                    raise ValueError(
-                        f"Caption column input_ids should contain either strings or lists of strings."
-                    )
-            inputs = tokenizer(
-                captions, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
-            )
-            return inputs.input_ids
-
-        input_ids = tokenize_captions_internal()
-        input_ids = torch.stack([example for example in input_ids])
+        
+        captions = []
+        for example in examples:
+            caption = example["input_string"]
+            if random.random() < args.proportion_empty_prompts:
+                captions.append("")
+            elif isinstance(caption, str):
+                captions.append(caption)
+            
+        inputs = tokenizer(
+            captions, max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
+        )
+        
+        input_ids = torch.stack([example for example in inputs.input_ids])
 
         return {
             "pixel_values": pixel_values,
             "conditioning_pixel_values": conditioning_pixel_values,
             "input_ids": input_ids,
-            "pixel_values_garm": pixel_values_garm,
-        }
+        } 
 
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         shuffle=True,
-        collate_fn=collate_fn_cp,
+        collate_fn=collate_fn_vton,
         batch_size=args.train_batch_size,
         num_workers=args.dataloader_num_workers,
     )
@@ -1163,20 +1038,9 @@ def main(args):
     )
 
     # Prepare everything with our `accelerator`.
-    _controlnet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        _controlnet, optimizer, train_dataloader, lr_scheduler
+    controlnet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        controlnet, optimizer, train_dataloader, lr_scheduler
     )
-    _controlnet.train()
-    
-    controlnet = UNetVton2DConditionModel.from_pretrained(
-            args.pretrained_model_name_or_path,
-            subfolder="unet",
-            torch_dtype=torch.float16,
-            use_safetensors=True,
-        )
-    
-    import ipdb; ipdb.set_trace()
-    controlnet.train() # UNetVton2DConditionModel
 
     # For mixed precision training we cast the text_encoder and vae weights to half-precision
     # as these models are only used for inference, keeping weights in full precision is not required.
@@ -1206,6 +1070,7 @@ def main(args):
         # tensorboard cannot handle list types for config
         tracker_config.pop("validation_prompt")
         tracker_config.pop("validation_image")
+        tracker_config.pop("validation_image_garm")
 
         accelerator.init_trackers(args.tracker_project_name, config=tracker_config)
 
@@ -1264,37 +1129,42 @@ def main(args):
             with accelerator.accumulate(controlnet):
                 # Convert images to latent space
                 latents = vae.encode(batch["pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
-                latents_garm = vae.encode(batch["pixel_values_garm"].to(dtype=weight_dtype)).latent_dist.sample()
+                latents_garm = vae.encode(batch["conditioning_pixel_values"].to(dtype=weight_dtype)).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
-
+                latents_garm = latents_garm * vae.config.scaling_factor
+                
                 # Sample noise that we'll add to the latents
                 noise = torch.randn_like(latents)
+                noise_garm = torch.randn_like(latents_garm)
                 bsz = latents.shape[0]
+                bsz_garm = latents_garm.shape[0]
                 # Sample a random timestep for each image
-                # TODO: dk timestep controlnet
                 timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
                 timesteps = timesteps.long()
+                timesteps_garm = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz_garm,), device=latents_garm.device)
+                timesteps_garm = timesteps_garm.long()
 
                 # Add noise to the latents according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
-                noisy_latents_garm = noise_scheduler.add_noise(latents_garm, noise, timesteps)
+                noisy_latents_garm = noise_scheduler.add_noise(latents_garm, noise_garm, timesteps_garm)
+                
                 # Get the text embedding for conditioning
                 encoder_hidden_states = text_encoder(batch["input_ids"], return_dict=False)[0]
 
                 controlnet_image = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
 
-                _, spatial_attn_outputs = controlnet(
+                down_block_res_samples, mid_block_res_sample = controlnet(
                     noisy_latents_garm,
                     timesteps,
-                    encoder_hidden_states=prompt_embeds,
+                    encoder_hidden_states=encoder_hidden_states,
+                    controlnet_cond=controlnet_image,
                     return_dict=False,
                 )
 
                 # Predict the noise residual
                 model_pred = unet(
                     noisy_latents,
-                    spatial_attn_outputs,
                     timesteps,
                     encoder_hidden_states=encoder_hidden_states,
                     down_block_additional_residuals=[
@@ -1317,20 +1187,6 @@ def main(args):
                 if accelerator.sync_gradients:
                     params_to_clip = controlnet.parameters()
                     accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
-                
-                # TODO: log the collected gradients
-                grad_dict = []
-                non_leaf_pars = []
-                for p in list(controlnet.parameters()):
-                    if not p.requires_grad:
-                        raise ValueError("A parameter didn't require grad!")
-                    elif not p.is_leaf:
-                        non_leaf_pars.append(p)
-                    elif p.grad is None:
-                        raise ValueError(f"A parameter's grad is None! Is Leaf: {p.is_leaf}")
-                    else:
-                        grad_dict.append(p.grad.abs().mean())  
-                        
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=args.set_grads_to_none)
@@ -1386,11 +1242,27 @@ def main(args):
             if global_step >= args.max_train_steps:
                 break
 
-    # Create the pipeline using the trained modules and save it.
+    # Create the pipeline using using the trained modules and save it.
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
         controlnet = unwrap_model(controlnet)
         controlnet.save_pretrained(args.output_dir)
+
+        # Run a final round of validation.
+        image_logs = None
+        if args.validation_prompt is not None:
+            image_logs = log_validation(
+                vae=vae,
+                text_encoder=text_encoder,
+                tokenizer=tokenizer,
+                unet=unet,
+                controlnet=None,
+                args=args,
+                accelerator=accelerator,
+                weight_dtype=weight_dtype,
+                step=global_step,
+                is_final_validation=True,
+            )
 
         if args.push_to_hub:
             save_model_card(
