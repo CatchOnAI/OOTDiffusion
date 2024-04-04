@@ -1154,16 +1154,16 @@ def main(args):
 
                 controlnet_image = batch["conditioning_pixel_values"].to(dtype=weight_dtype)
 
-                down_block_res_samples, mid_block_res_sample = controlnet(
+                down_block_res_samples, mid_block_res_sample = controlnet.forward(
                     noisy_latents_garm,
-                    timesteps,
+                    0,
                     encoder_hidden_states=encoder_hidden_states,
                     controlnet_cond=controlnet_image,
                     return_dict=False,
                 )
 
                 # Predict the noise residual
-                model_pred = unet(
+                model_pred = unet.forward(
                     noisy_latents,
                     timesteps,
                     encoder_hidden_states=encoder_hidden_states,
