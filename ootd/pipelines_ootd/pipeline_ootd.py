@@ -297,6 +297,7 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
         # mask = torch.tensor(mask)
         # mask = mask / 255
         # mask = mask.reshape(-1, 1, mask.size(-2), mask.size(-1))
+        # TODO: is the mask needed to be preprocessed?
         mask = self.image_processor.preprocess(mask)
 
         # 4. set timesteps

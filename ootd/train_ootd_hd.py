@@ -87,7 +87,7 @@ class OOTDiffusionHD:
 
         self.scheduler = DDPMScheduler.from_pretrained(
             MODEL_PATH, 
-            subfolder="scheduler"
+            subfolder="sd15_scheduler"
             )
         
         self.pipe = OotdPipeline.from_pretrained(

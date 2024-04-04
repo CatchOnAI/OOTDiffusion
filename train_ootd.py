@@ -144,6 +144,7 @@ def log_validation(model, args, accelerator, weight_dtype, test_dataloder):
                     "orig_img": image_ori, 
                     "samples": samples, 
                     "prompt": prompt,
+                    "inpaint mask": inpaint_mask,
                     "mask": mask
                     })
 
@@ -154,7 +155,8 @@ def log_validation(model, args, accelerator, weight_dtype, test_dataloder):
                 formatted_images.append(wandb.Image(log["garment"], caption="garment images"))
                 formatted_images.append(wandb.Image(log["model"], caption="masked model images"))
                 formatted_images.append(wandb.Image(log["orig_img"], caption="original images"))
-                formatted_images.append(wandb.Image(log["mask"], caption="inpaint mask"))
+                formatted_images.append(wandb.Image(log["inpaint mask"], caption="inpaint mask"))
+                formatted_images.append(wandb.Image(log["mask"], caption="mask"))
                 formatted_images.append(wandb.Image(log["samples"], caption=log["prompt"]))
             tracker.log({"validation": formatted_images})
         else:
@@ -1119,7 +1121,7 @@ def main(args):
                 image_vton = batch["inpaint_image"]
                 image_ori = batch["GT"]
                 inpaint_mask = batch["inpaint_mask"]
-                mask = batch["inpaint_mask"]
+                mask = batch["mask"]
                 prompt = batch["prompt"]
                 
                 noise_pred, noise = model(
