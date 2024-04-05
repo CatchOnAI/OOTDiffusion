@@ -918,9 +918,10 @@ def main(args):
         accelerator.register_load_state_pre_hook(load_model_hook)
 
     vae.requires_grad_(False)
-    unet.requires_grad_(False)
+    unet.requires_grad_(True)
     text_encoder.requires_grad_(False)
     controlnet.train()
+    unet.train()
 
     if args.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
@@ -938,6 +939,7 @@ def main(args):
 
     if args.gradient_checkpointing:
         controlnet.enable_gradient_checkpointing()
+        unet.enable_gradient_checkpointing()
 
     # Check that all trainable models are in full precision
     low_precision_error_string = (
@@ -974,7 +976,8 @@ def main(args):
         optimizer_class = torch.optim.AdamW
 
     # Optimizer creation
-    params_to_optimize = controlnet.parameters()
+    params_to_optimize = list(controlnet.parameters()) + list(unet.parameters())
+    
     optimizer = optimizer_class(
         params_to_optimize,
         lr=args.learning_rate,
