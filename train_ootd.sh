@@ -9,16 +9,17 @@ accelerate launch train_ootd.py \
     --dataroot="/workspace/OOTDiffusion/data/VITON-HD" \
     --train_data_list="subtrain_0.1.txt" \
     --test_data_list="subtrain_0.1.txt" \
-    --num_train_epochs="20" \
+    --num_train_epochs="100" \
     --checkpointing_steps="500" \
     --use_8bit_adam \
     --gradient_checkpointing \
     --enable_xformers_memory_efficient_attention \
-    --validation_steps="5" \
+    --validation_steps="100" \
     --inference_steps="50" \
     --log_grads \
     --report_to="wandb" \
     --seed="42" \
-    --gradient_accumulation_steps="4" 
+    --gradient_accumulation_steps="1" 
+    # --clip_grad_norm \
     # --tracker_project_name="train_OOTDdiffusion" \
     # --tracker_entity="xuziang" \

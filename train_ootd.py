@@ -579,6 +579,12 @@ def parse_args(input_args=None):
         default="catchonlabs",
     )
 
+    parser.add_argument(
+        "--clip_gard_norm",
+        action="store_true",
+        help="if clip the gradients' norm by max_grad_norm"
+    )
+
     if input_args is not None:
         args = parser.parse_args(input_args)
     else:
@@ -772,7 +778,7 @@ def collate_fn(examples):
     }
 
 def main(args):
-    args.notes = "Concate uncond_img_latents instead of making noise concate itself. Change time emb in unet_vton from t to 0."
+    args.notes = "use vae.config.scaling_factor in encoding latents. Cancel clip grad."
     if args.report_to == "wandb" and args.hub_token is not None:
         raise ValueError(
             "You cannot use both --report_to=wandb and --hub_token due to a security risk of exposing your token."
@@ -1142,7 +1148,7 @@ def main(args):
                 
                 accelerator.backward(loss)
                 # TODO: Do we need to clip gradients?
-                if accelerator.sync_gradients:
+                if args.clip_gard_norm:
                     accelerator.clip_grad_norm_(model.unet_garm.parameters(), args.max_grad_norm)
                     # accelerator.clip_grad_norm_(model.unet_vton.parameters(), args.max_grad_norm)
                     # accelerator.clip_grad_norm_(model.vae.parameters(), args.max_grad_norm)  

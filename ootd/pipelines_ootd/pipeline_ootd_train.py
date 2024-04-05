@@ -331,6 +331,9 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
         # concat latents, image_latents in the channel dimension
         uncond_image_latents = torch.zeros_like(image_ori_latents)
         image_ori_latents = torch.cat([image_ori_latents, uncond_image_latents], dim=0) if self.do_classifier_free_guidance else image_ori_latents
+        # TODO: scale the latents as OOTDiffusion-train did.
+        # image_ori_latents = image_ori_latents * self.vae_scale_factor
+        image_ori_latents = image_ori_latents * self.vae.config.scaling_factor
 
         noise = torch.randn_like(image_ori_latents)
         t = torch.randint(0, self.scheduler.num_train_timesteps, (batch_size, ), device=device)
