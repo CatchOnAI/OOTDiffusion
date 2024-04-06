@@ -102,9 +102,9 @@ class CPDataset(data.Dataset):
         self.c_names["unpaired"] = c_names
 
         # load caption dict
-        caption_file_name = data_list.replace(".txt", "_captions.json")
-        with open(osp.join(dataroot, caption_file_name), "r") as f:
-            self.caption_dict = json.load(f)
+        # caption_file_name = data_list.replace(".txt", "_captions.json")
+        # with open(osp.join(dataroot, caption_file_name), "r") as f:
+        #     self.caption_dict = json.load(f)
 
     def name(self):
         return "CPDataset"
@@ -492,7 +492,7 @@ class CPDatasetV2(CPDataset):
         hands_mask = torch.clamp(hands_mask, min=0.0, max=1.0)
         
         # get the caption of the cloth
-        caption = self.caption_dict[c_name[key]]
+        # caption = self.caption_dict[c_name[key]]
 
         # get masked vton image by ootd
         c_img = np.array(c_img).astype(np.uint8)

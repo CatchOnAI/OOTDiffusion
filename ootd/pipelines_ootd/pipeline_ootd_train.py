@@ -336,7 +336,8 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
         image_ori_latents = image_ori_latents * self.vae.config.scaling_factor
 
         noise = torch.randn_like(image_ori_latents)
-        t = torch.randint(0, self.scheduler.num_train_timesteps, (batch_size, ), device=device)
+        bsz = image_ori_latents.shape[0]
+        t = torch.randint(0, self.scheduler.num_train_timesteps, (bsz, ), device=device)
         noisy_latents = self.scheduler.add_noise(image_ori_latents, noise, t)
         # TODO: the following concatenation is necessary for classifier free guidance. 
         # But why is it?

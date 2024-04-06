@@ -40,6 +40,7 @@ class OOTDiffusionHD:
         self.gpu_id = 'cuda:' + str(gpu_id)
 
         MODEL_PATH = model_path
+        UNET_PATH = kwargs["unet_path"] if "unet_path" in kwargs else MODEL_PATH
         VIT_PATH = kwargs["vit_path"] if "vit_path" in kwargs else MODEL_PATH
         VAE_PATH = kwargs["vae_path"] if "vae_path" in kwargs else MODEL_PATH
 
@@ -51,9 +52,10 @@ class OOTDiffusionHD:
     
         # unet_sd = load_file(f"{MODEL_PATH}/diffusion_pytorch_model.safetensors")
         self.unet_garm = UNetGarm2DConditionModel.from_pretrained(
-            MODEL_PATH,
+            UNET_PATH,
             # subfolder="ootd_hd/unet_garm",
-            subfolder="ootd_hd/checkpoint-36000/unet_garm",
+            # subfolder="ootd_hd/checkpoint-36000/unet_garm",
+            subfolder="unet_garm",
             # torch_dtype=torch.float16,
             use_safetensors=True,
             local_files_only=True,
@@ -62,10 +64,11 @@ class OOTDiffusionHD:
         )
 
         self.unet_vton = UNetVton2DConditionModel.from_pretrained(
-            MODEL_PATH,
+            UNET_PATH,
             # subfolder="ootd_hd/unet_vton",
-            subfolder="ootd_hd/checkpoint-36000/unet_vton",
-            torch_dtype=torch.float16,
+            # subfolder="ootd_hd/checkpoint-36000/unet_vton",
+            subfolder="unet_vton",
+            # torch_dtype=torch.float16,
             use_safetensors=True,
             local_files_only=True,
             low_cpu_mem_usage=False,
@@ -87,7 +90,7 @@ class OOTDiffusionHD:
 
         self.scheduler = DDPMScheduler.from_pretrained(
             MODEL_PATH, 
-            subfolder="sd15_scheduler"
+            subfolder="scheduler"
             )
         
         self.pipe = OotdPipeline.from_pretrained(
@@ -129,11 +132,13 @@ class OOTDiffusionHD:
         print('Initial seed: ' + str(seed))
         generator = torch.manual_seed(seed)
 
-        # FIXME: this is the only way to combine img embs and text embs
+        # TODO: text prompt is not actually used. The prompt embs are based on empty str!
         prompt_image = self.auto_processor(images=image_garm, return_tensors="pt").to(self.gpu_id)
         prompt_image = self.image_encoder(prompt_image.data['pixel_values']).image_embeds
         prompt_image = prompt_image.unsqueeze(1)
-        prompt_embeds = self.text_encoder(self.tokenize_captions([""], 2).to(self.gpu_id))[0]
+        prompt_embeds = self.text_encoder(self.tokenize_captions([" "]*prompt_image.shape[0], 2).to(self.gpu_id))[0]
+        # prompt_embeds = self.text_encoder(self.tokenize_captions([prompt]*prompt_image.shape[0], 2).to(self.gpu_id))[0]
+
         prompt_embeds[:, 1:] = prompt_image[:]
 
         noise_pred, noise = self.pipe(

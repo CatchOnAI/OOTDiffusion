@@ -115,11 +115,11 @@ def log_validation(model, args, accelerator, weight_dtype, test_dataloder):
         for _, batch in enumerate(test_dataloder):
             with torch.autocast("cuda"):
                 prompt = batch["prompt"]
-                image_garm = batch["ref_imgs"]
-                image_vton = batch["inpaint_image"]
-                image_ori= batch["GT"]
-                inpaint_mask = batch["inpaint_mask"]
-                mask = batch["mask"]
+                image_garm = batch["ref_imgs"][0, :]
+                image_vton = batch["inpaint_image"][0, :]
+                image_ori= batch["GT"][0, :]
+                inpaint_mask = batch["inpaint_mask"][0, :]
+                mask = batch["mask"][0, :].unsqueeze(0)
 
                 # what is this doing?
                 prompt_image = model.auto_processor(images=image_garm, return_tensors="pt").to(args.gpu_id)
@@ -580,9 +580,15 @@ def parse_args(input_args=None):
     )
 
     parser.add_argument(
-        "--clip_gard_norm",
+        "--clip_grad_norm",
         action="store_true",
         help="if clip the gradients' norm by max_grad_norm"
+    )
+
+    parser.add_argument(
+        "--refactor_unet",
+        action="store_true",
+        help="When the training starts from sd15, unets need to be refactored to be compatible with the new model."
     )
 
     if input_args is not None:
@@ -841,10 +847,33 @@ def main(args):
         model = OOTDiffusionHD(
             args.gpu_id, 
             model_path=args.pretrained_model_name_or_path,
+            unet_path=f"{args.pretrained_model_name_or_path}/ootd_hd_train",
             vit_path=args.vit_path
             )
     else:
         raise NotImplementedError(f"Model type {args.model_type} not implemented")
+
+    # Refactor the unet of sd15 to be compatible with the new model
+    if args.refactor_unet:
+        # TODO: It looks like we don't need this because hf.diffusers can handel this with proper setting of initialization.
+        # Replace the first conv layer of the unet with a new one with the correct number of input channels
+        new_in_channels = 8
+        conv_new = torch.nn.Conv2d(
+            in_channels=new_in_channels,
+            out_channels=model.unet_vton.conv_in.out_channels,
+            kernel_size=3,
+            padding=1,
+        )
+
+        torch.nn.init.kaiming_normal_(conv_new.weight)  # Initialize new conv layer
+        conv_new.weight.data = conv_new.weight.data * 0.  # Zero-initialize new conv layer
+
+        conv_new.weight.data[:, :4] = model.unet_vton.conv_in.weight.data  # Copy weights from old conv layer of SD15
+        conv_new.bias.data = model.unet_vton.conv_in.bias.data  # Copy bias from old conv layer
+
+        model.unet_vton.conv_in = conv_new  # replace conv layer in unet
+        print('#######Replace the first conv layer of the unet with a new one with the correct number of input channels#######')
+        model.unet_garm.config['in_channels'] = new_in_channels  # update config
 
     # `accelerate` 0.16.0 will have better support for customized saving
     if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
@@ -931,8 +960,8 @@ def main(args):
 
     # Optimizer creation
     # params_to_optimize = (list(model.unet_garm.parameters()) + list(model.unet_vton.parameters()) + list(model.vae.parameters()))
-    # params_to_optimize = (list(model.unet_garm.parameters()) + list(model.unet_vton.parameters()))
-    params_to_optimize = model.unet_garm.parameters()
+    params_to_optimize = (list(model.unet_garm.parameters()) + list(model.unet_vton.parameters()))
+    # params_to_optimize = model.unet_garm.parameters()
     optimizer = optimizer_class(
         params_to_optimize,
         lr=args.learning_rate,
@@ -945,7 +974,7 @@ def main(args):
         assert "Please provide correct data root"
     # train_dataset = make_train_dataset(args, tokenizer, accelerator)
     train_dataset = CPDataset(args.dataroot, args.resolution, mode="train", data_list=args.train_data_list)
-    test_dataset = CPDataset(args.dataroot, args.resolution, mode="train", data_list=args.test_data_list)
+    test_dataset = CPDataset(args.dataroot, args.resolution, mode="test", data_list=args.test_data_list)
     
     # TODO: Rewrite the collate_fn
     def collate_fn_cp(examples):
@@ -1027,8 +1056,8 @@ def main(args):
     # TODO: choose training parts by args
     model.unet_garm.train()
     # model.unet_garm.requires_grad_(False)
-    # model.unet_vton.train()
-    model.unet_vton.requires_grad_(False)
+    model.unet_vton.train()
+    # model.unet_vton.requires_grad_(False)
 
     # Prepare everything with our `accelerator`.
     model, optimizer, train_dataloader, test_dataloader, lr_scheduler = accelerator.prepare(
@@ -1045,7 +1074,7 @@ def main(args):
 
     model.vae.to(accelerator.device, dtype=weight_dtype)
     # model.unet_garm.to(accelerator.device, dtype=weight_dtype)
-    model.unet_vton.to(accelerator.device, dtype=weight_dtype)
+    # model.unet_vton.to(accelerator.device, dtype=weight_dtype)
     model.text_encoder.to(accelerator.device, dtype=weight_dtype)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
@@ -1137,6 +1166,7 @@ def main(args):
                     image_ori = image_ori,
                     mask = mask,            
                     seed = args.seed,
+                    prompt = prompt,
                 )
                 
                 loss = F.mse_loss(noise_pred.float(), noise.float(), reduction="mean")
@@ -1148,7 +1178,7 @@ def main(args):
                 
                 accelerator.backward(loss)
                 # TODO: Do we need to clip gradients?
-                if args.clip_gard_norm:
+                if args.clip_grad_norm:
                     accelerator.clip_grad_norm_(model.unet_garm.parameters(), args.max_grad_norm)
                     # accelerator.clip_grad_norm_(model.unet_vton.parameters(), args.max_grad_norm)
                     # accelerator.clip_grad_norm_(model.vae.parameters(), args.max_grad_norm)  
