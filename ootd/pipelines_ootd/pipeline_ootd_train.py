@@ -343,10 +343,10 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
         latent_vton_model_input = torch.cat([noisy_latents, vton_latents], dim=1)
 
         # TODO: Should the time emb be 0 or t? Based on the loss and validation images it doen't bring difference.
-        _, spatial_attn_outputs = self.unet_garm(
+        print(UNetGarm2DConditionModel)
+        _, spatial_attn_outputs = self.unet_garm.forward(
             garm_latents,
-            0,
-            # t,
+            0, # t,
             encoder_hidden_states=prompt_embeds,
             return_dict=False,
         )
