@@ -84,7 +84,7 @@ def image_grid(imgs, rows, cols):
     return grid
 
 
-def log_validation(model, args, accelerator, weight_dtype, test_dataloder):
+def log_validation(model, args, accelerator, weight_dtype, test_dataloder = None, validation_dataloader = None):
     logger.info("Running validation... ")
 
     pipeline = OotdPipelineInference.from_pretrained(
@@ -110,60 +110,64 @@ def log_validation(model, args, accelerator, weight_dtype, test_dataloder):
     else:
         generator = torch.Generator(device=accelerator.device).manual_seed(args.seed)
 
-    image_logs = []
-    with torch.no_grad():
-        for _, batch in enumerate(test_dataloder):
-            with torch.autocast("cuda"):
-                prompt = batch["prompt"]
-                image_garm = batch["ref_imgs"][0, :]
-                image_vton = batch["inpaint_image"][0, :]
-                image_ori= batch["GT"][0, :]
-                inpaint_mask = batch["inpaint_mask"][0, :]
-                mask = batch["mask"][0, :].unsqueeze(0)
+    def sample_imgs(data_loader, log_key: str):
+        image_logs = []
+        with torch.no_grad():
+            for _, batch in enumerate(data_loader):
+                with torch.autocast("cuda"):
+                    prompt = batch["prompt"][0]
+                    image_garm = batch["ref_imgs"][0, :]
+                    image_vton = batch["inpaint_image"][0, :]
+                    image_ori= batch["GT"][0, :]
+                    inpaint_mask = batch["inpaint_mask"][0, :]
+                    mask = batch["mask"][0, :].unsqueeze(0)
 
-                # what is this doing?
-                prompt_image = model.auto_processor(images=image_garm, return_tensors="pt").to(args.gpu_id)
-                prompt_image = model.image_encoder(prompt_image.data['pixel_values']).image_embeds
-                prompt_image = prompt_image.unsqueeze(1)
-                prompt_embeds = model.text_encoder(model.tokenize_captions([""], 2).to(model.gpu_id))[0]
-                prompt_embeds[:, 1:] = prompt_image[:]
-                
-                samples = pipeline(
-                    prompt_embeds=prompt_embeds,
-                    image_garm=image_garm,
-                    image_vton=image_vton, 
-                    mask=mask,
-                    image_ori=image_ori,
-                    num_inference_steps=args.inference_steps,
-                    generator=generator,
-                ).images[0]
+                    # what is this doing?
+                    prompt_image = model.auto_processor(images=image_garm, return_tensors="pt").to(args.gpu_id)
+                    prompt_image = model.image_encoder(prompt_image.data['pixel_values']).image_embeds
+                    prompt_image = prompt_image.unsqueeze(1)
+                    prompt_embeds = model.text_encoder(model.tokenize_captions([""], 2).to(model.gpu_id))[0]
+                    prompt_embeds[:, 1:] = prompt_image[:]
+                    
+                    samples = pipeline(
+                        prompt_embeds=prompt_embeds,
+                        image_garm=image_garm,
+                        image_vton=image_vton, 
+                        mask=mask,
+                        image_ori=image_ori,
+                        num_inference_steps=args.inference_steps,
+                        generator=generator,
+                    ).images[0]
 
-                image_logs.append({
-                    "garment": image_garm, 
-                    "model": image_vton, 
-                    "orig_img": image_ori, 
-                    "samples": samples, 
-                    "prompt": prompt,
-                    "inpaint mask": inpaint_mask,
-                    "mask": mask
-                    })
+                    image_logs.append({
+                        "garment": image_garm, 
+                        "model": image_vton, 
+                        "orig_img": image_ori, 
+                        "samples": samples, 
+                        "prompt": prompt,
+                        "inpaint mask": inpaint_mask,
+                        "mask": mask
+                        })
 
-    for tracker in accelerator.trackers:
-        if tracker.name == "wandb":
-            formatted_images = []
-            for log in image_logs:
-                formatted_images.append(wandb.Image(log["garment"], caption="garment images"))
-                formatted_images.append(wandb.Image(log["model"], caption="masked model images"))
-                formatted_images.append(wandb.Image(log["orig_img"], caption="original images"))
-                formatted_images.append(wandb.Image(log["inpaint mask"], caption="inpaint mask"))
-                formatted_images.append(wandb.Image(log["mask"], caption="mask"))
-                formatted_images.append(wandb.Image(log["samples"], caption=log["prompt"]))
-            tracker.log({"validation": formatted_images})
-        else:
-            logger.warn(f"image logging not implemented for {tracker.name}")
-
-        return image_logs
-
+        for tracker in accelerator.trackers:
+            if tracker.name == "wandb":
+                formatted_images = []
+                for log in image_logs:
+                    formatted_images.append(wandb.Image(log["garment"], caption="garment images"))
+                    formatted_images.append(wandb.Image(log["model"], caption="masked model images"))
+                    formatted_images.append(wandb.Image(log["orig_img"], caption="original images"))
+                    formatted_images.append(wandb.Image(log["inpaint mask"], caption="inpaint mask"))
+                    formatted_images.append(wandb.Image(log["mask"], caption="mask"))
+                    formatted_images.append(wandb.Image(log["samples"], caption=log["prompt"]))
+                tracker.log({log_key: formatted_images})
+            else:
+                logger.warn(f"image logging not implemented for {tracker.name}")
+    
+    if validation_dataloader is not None:
+        sample_imgs(validation_dataloader, "validation_images")
+    if test_dataloder is not None:
+        sample_imgs(test_dataloder, "test_images")
+        
 
 def import_model_class_from_model_name_or_path(pretrained_model_name_or_path: str, revision: str):
     text_encoder_config = PretrainedConfig.from_pretrained(
@@ -526,6 +530,12 @@ def parse_args(input_args=None):
     )
 
     parser.add_argument(
+        "--validation_data_list",
+        type=str,
+        default=None,
+    )
+
+    parser.add_argument(
         "--test_data_list",
         type=str,
         default=None,
@@ -784,7 +794,7 @@ def collate_fn(examples):
     }
 
 def main(args):
-    args.notes = "use vae.config.scaling_factor in encoding latents. Cancel clip grad."
+    args.notes = "Train from OOTDiffusion model."
     if args.report_to == "wandb" and args.hub_token is not None:
         raise ValueError(
             "You cannot use both --report_to=wandb and --hub_token due to a security risk of exposing your token."
@@ -847,7 +857,9 @@ def main(args):
         model = OOTDiffusionHD(
             args.gpu_id, 
             model_path=args.pretrained_model_name_or_path,
-            unet_path=f"{args.pretrained_model_name_or_path}/ootd_hd_train",
+            # unet_path=f"{args.pretrained_model_name_or_path}/ootd_hd_train",
+            vton_unet_path=f"{args.pretrained_model_name_or_path}/ootd_hd_train",
+            garm_unet_path=f"{args.pretrained_model_name_or_path}/ootd_hd/checkpoint-36000",
             vit_path=args.vit_path
             )
     else:
@@ -960,8 +972,9 @@ def main(args):
 
     # Optimizer creation
     # params_to_optimize = (list(model.unet_garm.parameters()) + list(model.unet_vton.parameters()) + list(model.vae.parameters()))
-    params_to_optimize = (list(model.unet_garm.parameters()) + list(model.unet_vton.parameters()))
+    # params_to_optimize = (list(model.unet_garm.parameters()) + list(model.unet_vton.parameters()))
     # params_to_optimize = model.unet_garm.parameters()
+    params_to_optimize = model.unet_vton.parameters()
     optimizer = optimizer_class(
         params_to_optimize,
         lr=args.learning_rate,
@@ -974,6 +987,7 @@ def main(args):
         assert "Please provide correct data root"
     # train_dataset = make_train_dataset(args, tokenizer, accelerator)
     train_dataset = CPDataset(args.dataroot, args.resolution, mode="train", data_list=args.train_data_list)
+    validation_dataset = CPDataset(args.dataroot, args.resolution, mode="train", data_list=args.validation_data_list)
     test_dataset = CPDataset(args.dataroot, args.resolution, mode="test", data_list=args.test_data_list)
     
     # TODO: Rewrite the collate_fn
@@ -1025,6 +1039,13 @@ def main(args):
         batch_size=args.train_batch_size,
         num_workers=args.dataloader_num_workers,
     )
+    validation_dataloader = torch.utils.data.DataLoader(
+        validation_dataset,
+        shuffle=True,
+        # collate_fn=collate_fn_cp,
+        batch_size=args.train_batch_size,
+        num_workers=args.dataloader_num_workers,
+    )
     test_dataloader = torch.utils.data.DataLoader(
         test_dataset,
         shuffle=True,
@@ -1054,8 +1075,8 @@ def main(args):
     model.image_encoder.requires_grad_(False)
 
     # TODO: choose training parts by args
-    model.unet_garm.train()
-    # model.unet_garm.requires_grad_(False)
+    # model.unet_garm.train()
+    model.unet_garm.requires_grad_(False)
     model.unet_vton.train()
     # model.unet_vton.requires_grad_(False)
 
@@ -1073,7 +1094,7 @@ def main(args):
         weight_dtype = torch.bfloat16
 
     model.vae.to(accelerator.device, dtype=weight_dtype)
-    # model.unet_garm.to(accelerator.device, dtype=weight_dtype)
+    model.unet_garm.to(accelerator.device, dtype=weight_dtype)
     # model.unet_vton.to(accelerator.device, dtype=weight_dtype)
     model.text_encoder.to(accelerator.device, dtype=weight_dtype)
 
@@ -1145,7 +1166,7 @@ def main(args):
     vae_grad_dict = defaultdict(list)
 
     # pre-train validation
-    log_validation(model, args,accelerator, weight_dtype, test_dataloader)
+    log_validation(model, args, accelerator, weight_dtype, test_dataloader, validation_dataloader)
     
     # training starts!
     for epoch in range(first_epoch, args.num_train_epochs):
@@ -1255,6 +1276,7 @@ def main(args):
                             accelerator,
                             weight_dtype,
                             test_dataloader,
+                            validation_dataloader,
                         )
 
             logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0]}

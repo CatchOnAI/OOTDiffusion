@@ -5,9 +5,10 @@ accelerate launch train_ootd.py \
     --dataset_name="SaffalPoosh/VITON-HD-test" \
     --resolution="512" \
     --learning_rate="1e-5" \
-    --train_batch_size="8" \
+    --train_batch_size="16" \
     --dataroot="/workspace/OOTDiffusion/data/VITON-HD" \
     --train_data_list="train_pairs.txt" \
+    --validation_data_list="subtrain_0.1.txt" \
     --test_data_list="subtest_20.txt" \
     --num_train_epochs="150" \
     --checkpointing_steps="5000" \

@@ -41,6 +41,8 @@ class OOTDiffusionHD:
 
         MODEL_PATH = model_path
         UNET_PATH = kwargs["unet_path"] if "unet_path" in kwargs else MODEL_PATH
+        GARM_UNET_PATH = kwargs["garm_unet_path"] if "garm_unet_path" in kwargs else UNET_PATH
+        VTON_UNET_PATH = kwargs["vton_unet_path"] if "vton_unet_path" in kwargs else UNET_PATH
         VIT_PATH = kwargs["vit_path"] if "vit_path" in kwargs else MODEL_PATH
         VAE_PATH = kwargs["vae_path"] if "vae_path" in kwargs else MODEL_PATH
 
@@ -52,9 +54,7 @@ class OOTDiffusionHD:
     
         # unet_sd = load_file(f"{MODEL_PATH}/diffusion_pytorch_model.safetensors")
         self.unet_garm = UNetGarm2DConditionModel.from_pretrained(
-            UNET_PATH,
-            # subfolder="ootd_hd/unet_garm",
-            # subfolder="ootd_hd/checkpoint-36000/unet_garm",
+            GARM_UNET_PATH,
             subfolder="unet_garm",
             # torch_dtype=torch.float16,
             use_safetensors=True,
@@ -64,9 +64,7 @@ class OOTDiffusionHD:
         )
 
         self.unet_vton = UNetVton2DConditionModel.from_pretrained(
-            UNET_PATH,
-            # subfolder="ootd_hd/unet_vton",
-            # subfolder="ootd_hd/checkpoint-36000/unet_vton",
+            VTON_UNET_PATH,
             subfolder="unet_vton",
             # torch_dtype=torch.float16,
             use_safetensors=True,
