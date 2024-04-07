@@ -854,13 +854,20 @@ def main(args):
     # Load scheduler and models
     if args.model_type == "hd":
         # TODO: it is better to move all these paths to args or a config file.
-        model = OOTDiffusionHD(
-            args.gpu_id, 
-            model_path=args.pretrained_model_name_or_path,
-            # unet_path=f"{args.pretrained_model_name_or_path}/ootd_hd_train",
-            vton_unet_path=f"{args.pretrained_model_name_or_path}/ootd_hd_train",
-            garm_unet_path=f"{args.pretrained_model_name_or_path}/ootd_hd/checkpoint-36000",
-            vit_path=args.vit_path
+        if args.pretrained_model_name_or_path and args.pretrained_model_name_or_path!="runwayml/stable-diffusion-v1-5":
+            model = OOTDiffusionHD(
+                args.gpu_id, 
+                model_path=args.pretrained_model_name_or_path,
+                # unet_path=f"{args.pretrained_model_name_or_path}/ootd_hd_train",
+                vton_unet_path=f"{OOTDiffusionHD}/ootd_hd_train",
+                garm_unet_path=f"{args.pretrained_model_name_or_path}/ootd_hd/checkpoint-36000",
+                vit_path=args.vit_path
+                )
+        else:
+            model = OOTDiffusionHD(
+                args.gpu_id,
+                model_path=args.pretrained_model_name_or_path,
+                vit_path=args.vit_path
             )
     else:
         raise NotImplementedError(f"Model type {args.model_type} not implemented")

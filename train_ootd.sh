@@ -1,12 +1,12 @@
 accelerate launch train_ootd.py \
-    --pretrained_model_name_or_path="/workspace/OOTDiffusion/checkpoints/ootd" \
+    --pretrained_model_name_or_path="runwayml/stable-diffusion-v1-5" \
     --mixed_precision="fp16" \
-    --output_dir="/workspace/OOTDiffusion/output/logs/train_ootd" \
+    --output_dir="output/logs/train_ootd" \
     --dataset_name="SaffalPoosh/VITON-HD-test" \
     --resolution="512" \
     --learning_rate="1e-5" \
     --train_batch_size="16" \
-    --dataroot="/workspace/OOTDiffusion/data/VITON-HD" \
+    --dataroot="../data/updated-VITON-HD/" \
     --train_data_list="train_pairs.txt" \
     --validation_data_list="subtrain_0.1.txt" \
     --test_data_list="subtest_20.txt" \
