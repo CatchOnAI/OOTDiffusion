@@ -50,13 +50,34 @@ class OOTDiffusionHD:
         )
     
         # unet_sd = load_file(f"{MODEL_PATH}/diffusion_pytorch_model.safetensors")
+        # self.unet_garm = UNetGarm2DConditionModel.from_pretrained(
+        #     MODEL_PATH,
+        #     # subfolder="ootd_hd/unet_garm",
+        #     subfolder="ootd_hd/checkpoint-36000/unet_garm",
+        #     # torch_dtype=torch.float16,
+        #     use_safetensors=True,
+        #     local_files_only=True,
+        #     low_cpu_mem_usage=False,
+        #     ignore_mismatched_sizes=True
+        # )
+
+        # self.unet_vton = UNetVton2DConditionModel.from_pretrained(
+        #     MODEL_PATH,
+        #     # subfolder="ootd_hd/unet_vton",
+        #     subfolder="ootd_hd/checkpoint-36000/unet_vton",
+        #     torch_dtype=torch.float16,
+        #     use_safetensors=True,
+        #     local_files_only=True,
+        #     low_cpu_mem_usage=False,
+        #     ignore_mismatched_sizes=True
+        # )
+        
         self.unet_garm = UNetGarm2DConditionModel.from_pretrained(
             MODEL_PATH,
             # subfolder="ootd_hd/unet_garm",
-            subfolder="ootd_hd/checkpoint-36000/unet_garm",
+            subfolder="unet",
             # torch_dtype=torch.float16,
             use_safetensors=True,
-            local_files_only=True,
             low_cpu_mem_usage=False,
             ignore_mismatched_sizes=True
         )
@@ -64,13 +85,14 @@ class OOTDiffusionHD:
         self.unet_vton = UNetVton2DConditionModel.from_pretrained(
             MODEL_PATH,
             # subfolder="ootd_hd/unet_vton",
-            subfolder="ootd_hd/checkpoint-36000/unet_vton",
+            subfolder="unet",
             torch_dtype=torch.float16,
+            in_channels=8,
             use_safetensors=True,
-            local_files_only=True,
             low_cpu_mem_usage=False,
             ignore_mismatched_sizes=True
         )
+    
         
         self.auto_processor = AutoProcessor.from_pretrained(VIT_PATH)
         self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(VIT_PATH).to(self.gpu_id)
