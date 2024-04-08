@@ -160,8 +160,7 @@ class OOTDiffusionHD:
         prompt_image = self.auto_processor(images=image_garm, return_tensors="pt").to(self.gpu_id)
         prompt_image = self.image_encoder(prompt_image.data['pixel_values']).image_embeds
         prompt_image = prompt_image.unsqueeze(1)
-        prompt_embeds = self.text_encoder(self.tokenize_captions([" "]*prompt_image.shape[0], 2).to(self.gpu_id))[0]
-        # prompt_embeds = self.text_encoder(self.tokenize_captions([prompt]*prompt_image.shape[0], 2).to(self.gpu_id))[0]
+        prompt_embeds = self.text_encoder(self.tokenize_captions(prompt, 2).to(self.gpu_id))[0]
 
         prompt_embeds[:, 1:] = prompt_image[:]
 

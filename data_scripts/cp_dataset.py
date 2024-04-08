@@ -491,8 +491,16 @@ class CPDatasetV2(CPDataset):
         hands_mask = torch.sum(new_parse_agnostic_map[5:7], dim=0, keepdim=True)
         hands_mask = torch.clamp(hands_mask, min=0.0, max=1.0)
         
-        # get the caption of the cloth
-        # caption = self.caption_dict[c_name[key]]
+        # load captions
+        caption_name = osp.join(self.data_path, "cloth", c_name[key]).replace("cloth", "cloth_caption").replace(".jpg", ".txt")
+        # Check if the file exists
+        if os.path.exists(caption_name):
+            with open(caption_name, 'r') as file:
+                caption_string = file.read()
+        else:
+            print("File does not exist. ", caption_name)
+            caption_string = "A cloth"  # Set caption_string to an empty string or handle the case when the file doesn't exist
+
 
         # get masked vton image by ootd
         c_img = np.array(c_img).astype(np.uint8)
@@ -505,8 +513,7 @@ class CPDatasetV2(CPDataset):
             "mask": mask,
             "ref_imgs": ref_image,
             "file_name": self.im_names[index],
-            # "prompt": caption,
-            "prompt": "upperbody",
+            "prompt": caption_string,
         }
         return result
 

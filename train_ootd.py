@@ -115,7 +115,7 @@ def log_validation(model, args, accelerator, weight_dtype, test_dataloder = None
         with torch.no_grad():
             for _, batch in enumerate(data_loader):
                 with torch.autocast("cuda"):
-                    prompt = batch["prompt"][0]
+                    prompt = batch["prompt"]
                     image_garm = batch["ref_imgs"][0, :]
                     image_vton = batch["inpaint_image"][0, :]
                     image_ori= batch["GT"][0, :]
@@ -126,7 +126,8 @@ def log_validation(model, args, accelerator, weight_dtype, test_dataloder = None
                     prompt_image = model.auto_processor(images=image_garm, return_tensors="pt").to(args.gpu_id)
                     prompt_image = model.image_encoder(prompt_image.data['pixel_values']).image_embeds
                     prompt_image = prompt_image.unsqueeze(1)
-                    prompt_embeds = model.text_encoder(model.tokenize_captions([""], 2).to(model.gpu_id))[0]
+                    print("########## DEBUG #########", prompt)
+                    prompt_embeds = model.text_encoder(model.tokenize_captions(prompt, 2).to(model.gpu_id))[0]
                     prompt_embeds[:, 1:] = prompt_image[:]
                     
                     samples = pipeline(
