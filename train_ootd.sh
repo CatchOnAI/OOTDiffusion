@@ -1,5 +1,5 @@
 accelerate launch train_ootd.py \
-    --pretrained_model_name_or_path="runwayml/stable-diffusion-v1-5" \
+    --pretrained_model_name_or_path="checkpoints/ootd" \
     --mixed_precision="fp16" \
     --output_dir="output/logs/train_ootd" \
     --dataset_name="SaffalPoosh/VITON-HD-test" \

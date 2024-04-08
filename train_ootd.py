@@ -859,7 +859,7 @@ def main(args):
                 args.gpu_id, 
                 model_path=args.pretrained_model_name_or_path,
                 # unet_path=f"{args.pretrained_model_name_or_path}/ootd_hd_train",
-                vton_unet_path=f"{OOTDiffusionHD}/ootd_hd_train",
+                vton_unet_path=f"{args.pretrained_model_name_or_path}/ootd_hd/checkpoint-36000",
                 garm_unet_path=f"{args.pretrained_model_name_or_path}/ootd_hd/checkpoint-36000",
                 vit_path=args.vit_path
                 )

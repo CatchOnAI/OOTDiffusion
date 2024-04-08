@@ -53,6 +53,7 @@ class OOTDiffusionHD:
         )
     
         # unet_sd = load_file(f"{MODEL_PATH}/diffusion_pytorch_model.safetensors")
+        
         self.unet_garm = UNetGarm2DConditionModel.from_pretrained(
             GARM_UNET_PATH,
             subfolder="unet_garm",
@@ -62,7 +63,8 @@ class OOTDiffusionHD:
             low_cpu_mem_usage=False,
             ignore_mismatched_sizes=True
         )
-
+        import ipdb; ipdb.set_trace()
+        
         self.unet_vton = UNetVton2DConditionModel.from_pretrained(
             VTON_UNET_PATH,
             subfolder="unet_vton",
