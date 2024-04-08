@@ -600,6 +600,12 @@ def parse_args(input_args=None):
         action="store_true",
         help="When the training starts from sd15, unets need to be refactored to be compatible with the new model."
     )
+    
+    parser.add_argument(
+        "--vton_unet_path",
+        type=str,
+        default=None,
+    )
 
     if input_args is not None:
         args = parser.parse_args(input_args)
@@ -719,6 +725,8 @@ def make_train_dataset(args, tokenizer, accelerator):
             raise ValueError(
                 f"`--parse` value '{args.parse}' not found in dataset columns. Dataset columns are: {', '.join(column_names)}"
             )
+
+        
 
     def tokenize_captions(examples, is_train=True):
         captions = []
@@ -851,6 +859,11 @@ def main(args):
             use_fast=False,
         )
 
+    if args.vton_unet_path is None:
+        vton_unet_path = args.pretrained_model_name_or_path + "/ootd_hd/checkpoint-36000"
+    else:
+        vton_unet_path = args.vton_unet_path
+    
     # Load scheduler and models
     if args.model_type == "hd":
         # TODO: it is better to move all these paths to args or a config file.
@@ -858,7 +871,7 @@ def main(args):
             args.gpu_id, 
             model_path=args.pretrained_model_name_or_path,
             # unet_path=f"{args.pretrained_model_name_or_path}/ootd_hd_train",
-            vton_unet_path=f"{args.pretrained_model_name_or_path}/ootd_hd_train",
+            vton_unet_path=f"{vton_unet_path}",
             garm_unet_path=f"{args.pretrained_model_name_or_path}/ootd_hd/checkpoint-36000",
             vit_path=args.vit_path
             )
@@ -1078,7 +1091,7 @@ def main(args):
     # model.unet_garm.train()
     model.unet_garm.requires_grad_(False)
     model.unet_vton.train()
-    # model.unet_vton.requires_grad_(False)
+    model.unet_vton.requires_grad_(True)
 
     # Prepare everything with our `accelerator`.
     model, optimizer, train_dataloader, test_dataloader, lr_scheduler = accelerator.prepare(

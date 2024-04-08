@@ -65,13 +65,40 @@ class OOTDiffusionHD:
 
         self.unet_vton = UNetVton2DConditionModel.from_pretrained(
             VTON_UNET_PATH,
-            subfolder="unet_vton",
+            subfolder="unet",
+            # in_channels=8,
             # torch_dtype=torch.float16,
             use_safetensors=True,
             local_files_only=True,
             low_cpu_mem_usage=False,
             ignore_mismatched_sizes=True
         )
+        
+        def replace_first_conv_layer(unet_model, new_in_channels):
+            # Access the first convolutional layer
+            # This example assumes the first conv layer is directly an attribute of the model
+            # Adjust the attribute access based on your model's structure
+            original_first_conv = unet_model.conv_in
+            
+            # Create a new Conv2d layer with the desired number of input channels
+            # and the same parameters as the original layer
+            new_first_conv = torch.nn.Conv2d(
+                in_channels=new_in_channels,
+                out_channels=original_first_conv.out_channels,
+                kernel_size=original_first_conv.kernel_size,
+                padding=1,
+            )
+            
+            torch.nn.init.kaiming_normal_(new_first_conv.weight)  # Initialize new conv layer
+            new_first_conv.weight.data = new_first_conv.weight.data * 0.  # Zero-initialize new conv layer
+            new_first_conv.bias.data = original_first_conv.bias.data  # Copy bias from old conv layer
+            
+            new_first_conv.weight.data[:, :original_first_conv.in_channels] = original_first_conv.weight.data
+            
+            # Replace the original first conv layer with the new one
+            return new_first_conv
+
+        self.unet_vton.conv_in = replace_first_conv_layer(self.unet_vton, 8)  #replace the conv in layer from 4 to 8 to make sd15 match with new input dims
         
         self.auto_processor = AutoProcessor.from_pretrained(VIT_PATH)
         self.image_encoder = CLIPVisionModelWithProjection.from_pretrained(VIT_PATH).to(self.gpu_id)
@@ -91,17 +118,16 @@ class OOTDiffusionHD:
             subfolder="scheduler"
             )
         
-        self.pipe = OotdPipeline.from_pretrained(
-            MODEL_PATH,
+        self.pipe = OotdPipeline(
             vae=self.vae,
             text_encoder=self.text_encoder,
             tokenizer=self.tokenizer,
             unet_garm=self.unet_garm,
             unet_vton=self.unet_vton,
             scheduler=self.scheduler,
-            use_safetensors=True,
             safety_checker=None,
             requires_safety_checker=False,
+            feature_extractor=None,
         ).to(self.gpu_id)
         
     def tokenize_captions(self, captions, max_length):
@@ -110,7 +136,7 @@ class OOTDiffusionHD:
         )
         return inputs.input_ids
 
-
+    
     def __call__(self,
                 model_type='hd',
                 category='upperbody',
