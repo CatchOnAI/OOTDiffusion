@@ -126,7 +126,7 @@ def log_validation(model, args, accelerator, weight_dtype, test_dataloder = None
                     prompt_image = model.auto_processor(images=image_garm, return_tensors="pt").to(args.gpu_id)
                     prompt_image = model.image_encoder(prompt_image.data['pixel_values']).image_embeds
                     prompt_image = prompt_image.unsqueeze(1)
-                    print("########## DEBUG #########", prompt)
+                    print("########## DEBUG #########", prompt)  #TODO: add caption for trainning
                     prompt_embeds = model.text_encoder(model.tokenize_captions(prompt, 2).to(model.gpu_id))[0]
                     prompt_embeds[:, 1:] = prompt_image[:]
                     
