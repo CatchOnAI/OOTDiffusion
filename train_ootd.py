@@ -114,6 +114,7 @@ def log_validation(model, args, accelerator, weight_dtype, test_dataloder = None
         image_logs = []
         with torch.no_grad():
             for _, batch in enumerate(data_loader):
+                file_name = batch["file_name"][0]
                 with torch.autocast("cuda"):
                     prompt = batch["prompt"][0]
                     image_garm = batch["ref_imgs"][0, :]
@@ -146,19 +147,23 @@ def log_validation(model, args, accelerator, weight_dtype, test_dataloder = None
                         "samples": samples, 
                         "prompt": prompt,
                         "inpaint mask": inpaint_mask,
-                        "mask": mask
+                        "mask": mask,
+                        "file_name": file_name,
                         })
-
+        
         for tracker in accelerator.trackers:
             if tracker.name == "wandb":
                 formatted_images = []
                 for log in image_logs:
-                    formatted_images.append(wandb.Image(log["garment"], caption="garment images"))
-                    formatted_images.append(wandb.Image(log["model"], caption="masked model images"))
-                    formatted_images.append(wandb.Image(log["orig_img"], caption="original images"))
-                    formatted_images.append(wandb.Image(log["inpaint mask"], caption="inpaint mask"))
-                    formatted_images.append(wandb.Image(log["mask"], caption="mask"))
-                    formatted_images.append(wandb.Image(log["samples"], caption=log["prompt"]))
+                    
+                    str_prefix = "val/" + log["file_name"]+"/"
+                    print(str_prefix)
+                    formatted_images.append(wandb.Image(log["garment"], caption=str_prefix+"garment images"))
+                    formatted_images.append(wandb.Image(log["model"], caption=str_prefix+"masked model images"))
+                    formatted_images.append(wandb.Image(log["orig_img"], caption=str_prefix+"original images"))
+                    formatted_images.append(wandb.Image(log["inpaint mask"], caption=str_prefix+"inpaint mask"))
+                    formatted_images.append(wandb.Image(log["mask"], caption=str_prefix+"mask"))
+                    formatted_images.append(wandb.Image(log["samples"], caption=str_prefix+log["prompt"]))
                 tracker.log({log_key: formatted_images})
             else:
                 logger.warn(f"image logging not implemented for {tracker.name}")
@@ -1173,6 +1178,8 @@ def main(args):
     vae_grad_dict = defaultdict(list)
 
     # pre-train validation
+    # import ipdb; ipdb.set_trace()
+    
     log_validation(model, args, accelerator, weight_dtype, test_dataloader, validation_dataloader)
     
     # training starts!

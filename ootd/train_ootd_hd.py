@@ -63,7 +63,6 @@ class OOTDiffusionHD:
             low_cpu_mem_usage=False,
             ignore_mismatched_sizes=True
         )
-        import ipdb; ipdb.set_trace()
         
         self.unet_vton = UNetVton2DConditionModel.from_pretrained(
             VTON_UNET_PATH,

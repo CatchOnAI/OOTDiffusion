@@ -5,7 +5,7 @@ accelerate launch train_ootd.py \
     --dataset_name="SaffalPoosh/VITON-HD-test" \
     --resolution="512" \
     --learning_rate="1e-5" \
-    --train_batch_size="16" \
+    --train_batch_size="1" \
     --dataroot="../data/updated-VITON-HD/" \
     --train_data_list="train_pairs.txt" \
     --validation_data_list="subtrain_0.1.txt" \
@@ -21,7 +21,7 @@ accelerate launch train_ootd.py \
     --report_to="wandb" \
     --seed="42" \
     --clip_grad_norm \
-    --gradient_accumulation_steps="4" 
+    --gradient_accumulation_steps="4"\
     # --refactor_unet \
     # --tracker_project_name="train_OOTDdiffusion" \
     # --tracker_entity="xuziang" \
