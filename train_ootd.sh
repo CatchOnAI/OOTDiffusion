@@ -1,5 +1,5 @@
 accelerate launch train_ootd.py \
-    --pretrained_model_name_or_path="checkpoints/ootd" \
+    --pretrained_model_name_or_path="checkpoints/ootd_org" \
     --mixed_precision="fp16" \
     --output_dir="output/logs/train_ootd" \
     --dataset_name="SaffalPoosh/VITON-HD-test" \
@@ -21,7 +21,7 @@ accelerate launch train_ootd.py \
     --report_to="wandb" \
     --seed="42" \
     --clip_grad_norm \
-    --gradient_accumulation_steps="4"\
+    --gradient_accumulation_steps="4"
     # --refactor_unet \
     # --tracker_project_name="train_OOTDdiffusion" \
     # --tracker_entity="xuziang" \
