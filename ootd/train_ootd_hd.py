@@ -65,7 +65,7 @@ class OOTDiffusionHD:
 
         self.unet_vton = UNetVton2DConditionModel.from_pretrained(
             VTON_UNET_PATH,
-            subfolder="unet",
+            subfolder="unet_vton",
             # in_channels=8,
             # torch_dtype=torch.float16,
             use_safetensors=True,

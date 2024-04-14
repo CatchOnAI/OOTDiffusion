@@ -1,14 +1,15 @@
 accelerate launch train_ootd.py \
-    --pretrained_model_name_or_path="/workspace/OOTDiffusion/checkpoints/ootd" \
+    --pretrained_model_name_or_path="checkpoints/ootd_org" \
     --mixed_precision="fp16" \
-    --output_dir="/workspace/OOTDiffusion/output/logs/train_ootd" \
+    --output_dir="output/logs/train_ootd" \
     --dataset_name="SaffalPoosh/VITON-HD-test" \
     --resolution="512" \
     --learning_rate="1e-5" \
-    --train_batch_size="16" \
-    --dataroot="/workspace/OOTDiffusion/data/VITON-HD" \
-    --train_data_list="subtrain_20.txt" \
-    --test_data_list="subtrain_20_bk.txt" \
+    --train_batch_size="1" \
+    --dataroot="../data/VITON-HD" \
+    --train_data_list="subtrain_0.1.txt" \
+    --validation_data_list="subtrain_0.1.txt" \
+    --test_data_list="subtest_20.txt" \
     --num_train_epochs="150" \
     --checkpointing_steps="5000" \
     --gradient_checkpointing \

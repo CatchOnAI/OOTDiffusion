@@ -285,7 +285,7 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
         mask = self.image_processor.preprocess(mask)
         
         # 5. Prepare Image latents
-        garm_latents = self.prepare_garm_latents(
+        image_latents_garm = self.prepare_garm_latents(
             image_garm,
             batch_size,
             num_images_per_prompt,
@@ -347,10 +347,11 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
         latent_vton_model_input = torch.cat([noisy_latents, vton_latents], dim=1)
 
         # TODO: Should the time emb be 0 or t? Based on the loss and validation images it doen't bring difference.
+        import ipdb; ipdb.set_trace()
+        
         _, spatial_attn_outputs = self.unet_garm(
-            garm_latents,
-            0,
-            # t,
+            image_latents_garm, # (2, 4, 64, 64)
+            0, # t,
             encoder_hidden_states=prompt_embeds,
             return_dict=False,
         )
@@ -647,7 +648,7 @@ class OotdPipeline(DiffusionPipeline, TextualInversionLoaderMixin, LoraLoaderMix
         if do_classifier_free_guidance:
             uncond_image_latents = torch.zeros_like(image_latents)
             image_latents = torch.cat([image_latents, uncond_image_latents], dim=0)
-
+        import ipdb; ipdb.set_trace()
         return image_latents
     
     def prepare_vton_latents(

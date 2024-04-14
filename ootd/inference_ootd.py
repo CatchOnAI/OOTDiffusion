@@ -111,9 +111,12 @@ class OOTDiffusion:
             prompt_image = self.image_encoder(prompt_image.data['pixel_values']).image_embeds
             prompt_image = prompt_image.unsqueeze(1)
             if model_type == 'hd':
-                prompt_embeds = self.text_encoder(self.tokenize_captions([""], 2).to(self.gpu_id))[0]
+                import ipdb; ipdb.set_trace()
+                
+                prompt_embeds = self.text_encoder(self.tokenize_captions(["upperbody"], 2).to(self.gpu_id))[0]
                 prompt_embeds[:, 1:] = prompt_image[:]
             elif model_type == 'dc':
+                import ipdb; ipdb.set_trace()
                 prompt_embeds = self.text_encoder(self.tokenize_captions([category], 3).to(self.gpu_id))[0]
                 prompt_embeds = torch.cat([prompt_embeds, prompt_image], dim=1)
             else:
